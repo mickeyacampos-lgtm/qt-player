@@ -1,0 +1,1028 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>QT Chart Player</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+<style>
+/* VOICE: arcade, loud, night street
+   IDEA: the mod's own stage, played from its files
+   PICTURE: the playfield with the game's sprites, full window
+   COLOUR and TYPE: near-black street, alarm red; VT323
+   LAYOUT: setup card centred over the stage; the game fills the window */
+:root{color-scheme:dark;--bg:#110b12;--ink:#f4eef2;--red:#ff2a3c;--dim:#9d8f9a;--panel:#1d1420}
+*{box-sizing:border-box;min-width:0;border-radius:0}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:20px/1.3 "VT323",ui-monospace,monospace;overflow:hidden}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+.screen{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(10,5,10,.72);overflow:auto}
+.hide{display:none!important}
+.card{width:min(620px,100%);background:var(--panel);border:3px solid var(--red);padding:24px}
+h1{margin:0 0 6px;font-size:52px;line-height:1.05;font-weight:400}
+p{margin:0 0 14px;color:#d6c9d3}
+label{display:block;margin:12px 0 4px;color:var(--dim)}
+select,button,.pick{font:inherit;font-size:22px;color:var(--ink);background:#0d080e;border:2px solid #5a4656;padding:8px 12px;min-height:44px;width:100%;cursor:pointer}
+.pick{display:flex;align-items:center;justify-content:center;text-align:center;margin-top:8px;position:relative}
+.pick input{position:absolute;width:1px;height:1px;opacity:0}
+button.go{background:var(--red);border-color:var(--red);color:#fff;margin-top:18px}
+button:focus-visible,select:focus-visible,.pick:focus-within{outline:3px solid #fff;outline-offset:2px}
+.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+#status{margin-top:10px;color:#ffd0d5;min-height:26px}
+#info{font-size:18px;color:var(--dim);margin:10px 0 0}
+.menu{background:rgba(10,5,10,.55);justify-content:flex-start;padding-left:max(6vw,16px)}
+.list{display:flex;flex-direction:column;gap:6px;width:min(560px,100%)}
+.list h2{font-size:56px;line-height:1;font-weight:400;margin:0 0 6px}
+.list button{font-size:42px;text-align:left;background:rgba(0,0,0,.55);border:0;border-left:6px solid transparent;padding:4px 16px;min-height:52px}
+.list button.sel{border-left-color:var(--red);background:rgba(255,42,60,.22)}
+.small{font-size:18px;color:var(--dim)}
+.optbox{border:2px solid #5a4656;margin:12px 0 0;padding:6px 12px 10px}
+.optbox legend{color:var(--dim);padding:0 6px}
+.chk{display:flex;align-items:center;gap:10px;margin:6px 0;color:var(--ink);cursor:pointer;min-height:32px}
+.chk input{appearance:none;width:22px;height:22px;border:2px solid #8f8697;background:#0d080e;margin:0;flex:none;cursor:pointer}
+.chk input:checked{background:var(--red);border-color:var(--red);box-shadow:inset 0 0 0 4px #0d080e}
+.chk input:focus-visible{outline:3px solid #fff;outline-offset:2px}
+</style></head><body>
+<canvas id="cv"></canvas>
+
+<div id="setup" class="screen"><div class="card">
+  <h1>QT Chart Player</h1>
+  <p>Pick your Vs QT C.I. Edition folder. It reads every chart JSON, events.json, week, stage and character file, the songs, the sprites and the sounds right off your computer. Nothing gets uploaded.</p>
+  <button id="again" class="go hide" style="margin:0 0 6px"></button>
+  <label class="pick">Pick the game folder<input id="dir" type="file" webkitdirectory multiple></label>
+  <label class="pick">Or pick the mod .zip (no unzipping needed)<input id="zip" type="file" accept=".zip,application/zip"></label>
+  <label class="pick">Or pick files: Inst.ogg, Voices.ogg, a chart .json and the saw sounds<input id="files" type="file" multiple accept=".json,.ogg,.mp3"></label>
+  <div id="status"></div>
+  <div id="opts" class="hide">
+    <div class="row">
+      <div><label for="song">Song</label><select id="song"></select></div>
+      <div><label for="diff">Difficulty</label><select id="diff"></select></div>
+    </div>
+    <p id="info"></p>
+    <label for="keys">Keys</label>
+    <select id="keys"><option value="WASD">W A S D</option><option value="ASKL">A S K L</option><option value="DFJK">D F J K</option><option value="CVNM">C V N M</option></select>
+    <fieldset class="optbox"><legend>Options</legend>
+      <label class="chk"><input type="checkbox" id="o_lq"> Low quality (potato sprites, for Chromebooks)</label>
+      <label class="chk"><input type="checkbox" id="o_down"> Downscroll</label>
+      <label class="chk"><input type="checkbox" id="o_mid"> Middlescroll</label>
+      <label class="chk"><input type="checkbox" id="o_splash" checked> Note splashes</label>
+      <label class="chk"><input type="checkbox" id="o_flash" checked> Flashing lights</label>
+      <label class="chk"><input type="checkbox" id="o_zoom" checked> Camera zooms</label>
+    </fieldset>
+    <p class="small" style="margin-top:8px">Arrow keys always work. Space dodges saws. Enter or Esc opens the menu.</p>
+    <button id="start" class="go">Start</button>
+  </div>
+</div></div>
+
+<div id="menu" class="screen menu hide"><div class="list">
+  <h2 id="mtitle">PAUSED</h2>
+  <p id="minfo" class="small"></p>
+  <div id="mitems" class="list"></div>
+  <p class="small">Up / Down to pick, Enter to choose</p>
+</div></div>
+
+<script>
+{
+const $ = id => document.getElementById(id);
+const cv = $('cv'), g = cv.getContext('2d');
+const KEYSETS = { WASD:['KeyA','KeyS','KeyW','KeyD'], ASKL:['KeyA','KeyS','KeyK','KeyL'], DFJK:['KeyD','KeyF','KeyJ','KeyK'], CVNM:['KeyC','KeyV','KeyN','KeyM'] };
+const ARROWS = ['ArrowLeft','ArrowDown','ArrowUp','ArrowRight'];
+const DIRS = ['LEFT','DOWN','UP','RIGHT'];
+const NCOL = ['purple','blue','green','red'];
+const COL = ['#c24b99','#00ffff','#12fa05','#f9393f'];
+const ROT = [-Math.PI/2, Math.PI, 0, Math.PI/2];
+const AP = [[0,-.48],[.48,.02],[.2,.02],[.2,.46],[-.2,.46],[-.2,.02],[-.48,.02]];
+const ALERT_SND = {1:'alert',2:'alertdouble',3:'alerttriple',4:'alertquadruple'};
+const SOUNDS = ['alert','alertdouble','alerttriple','alertquadruple','attack','attack-double','attack-triple','attack-quadruple','sawbladehit','dodge01','killnote','corruptednote','crystalnote','dodgenote'];
+// note types, from the mod's custom_notetypes scripts and Psych's built-in ones
+// avoid = hitting it hurts (hitCausesMiss); miss = health lost; gain = health on hit
+const TYPES = {
+  'Hurt Note':           { tex:'HURT*', avoid:true, miss:.3 },
+  'Invisible Hurt Note': { tex:'HURT*', avoid:true, miss:.3, invis:true },
+  'Kill Notes':          { tex:'KILLNOTE_assets', avoid:true, miss:500, sound:'killnote' },
+  'Corrupted Notes':     { tex:'CORRUPTEDNOTE_assets', avoid:true, miss:.75, sound:'corruptednote' },
+  'Crystal Notes':       { tex:'CRYSTALNOTE_assets', avoid:true, miss:.3, sound:'crystalnote' },
+  'Dodge Notes':         { tex:'DODGENOTE_assets', miss:500, gain:0, noAnim:true, dodge:true, sound:'dodgenote' },
+  'Melody Notes':        { tex:'MELODYNOTE_assets', noAnim:true },
+  'Invisable Notes':     { invis:true },
+  'No Animation':        { noAnim:true },
+  'GF Sing':             { gf:true },
+};
+let lib = { files:new Map(), songs:{}, hz:{}, hzb:null };
+let cache = new Map();
+let ctx = null, bufs = {}, chart = null, S = null, W8 = null, dpr = 1, clock = 0, lastFrame = performance.now();
+let opt = { bot:false, practice:false, blue:0, keys:'WASD', diff:'' };
+let menu = null;
+const used = new Map();
+
+try { const k = localStorage.getItem('qtkeys'); if (k && KEYSETS[k]) $('keys').value = k; } catch (e) {}
+const OPTS = { lq:'o_lq', down:'o_down', mid:'o_mid', splash:'o_splash', flash:'o_flash', zoom:'o_zoom' };
+try { const o = JSON.parse(localStorage.getItem('qtopts') || '{}'); for (const [k, id] of Object.entries(OPTS)) if (k in o) $(id).checked = !!o[k]; } catch (e) {}
+function readOpts() {
+  const o = {}; for (const [k, id] of Object.entries(OPTS)) o[k] = $(id).checked;
+  if (o.lq !== opt.lq) cache = new Map();
+  Object.assign(opt, o); try { localStorage.setItem('qtopts', JSON.stringify(o)); } catch (e) {}
+  fit();
+}
+const status = s => { $('status').textContent = s; };
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const slug = s => String(s || '').trim().toLowerCase().replace(/\s+/g, '-');
+const readJson = async f => JSON.parse((await f.text()).replace(/^﻿/, ''));
+
+/* ---------- finding the game's files ---------- */
+async function scan(list) {
+  const entries = [], loose = { charts:{} }, hz0 = {};
+  for (const f of list) {
+    const p = (f.webkitRelativePath || '').replace(/\\/g,'/').toLowerCase();
+    const m = p.match(/(?:^|\/)((?:assets|mods)\/.*)$/);
+    if (m) entries.push([m[1], f]);
+    else if (!p) {
+      const n = f.name.toLowerCase();
+      if (/^inst\.(ogg|mp3)$/.test(n)) loose.inst = f;
+      else if (/^voices\.(ogg|mp3)$/.test(n)) loose.voices = f;
+      else if (n === 'events.json') loose.events = f;
+      else if (n.endsWith('.json') && !/^(dialogue|message)/.test(n)) loose.charts[n.slice(0,-5)] = f;
+      else if (/\.(ogg|mp3)$/.test(n)) hz0[n.replace(/\.(ogg|mp3)$/,'')] = f;
+    }
+  }
+  await build(entries, loose, hz0);
+}
+async function build(entries, loose = { charts:{} }, hz = {}) {
+  used.clear();
+  const files = new Map(entries), songs = {};
+  // sounds
+  for (const [k, f] of files) {
+    const m = k.match(/(?:^|\/)(?:sounds\/hazard|mods\/sounds)\/([^\/]+)\.ogg$/); if (m && SOUNDS.includes(m[1])) hz[m[1]] ??= f;
+    const c = k.match(/^mods\/sounds\/3,2,1,go!\/(1|2|3|go)\.ogg$/); if (c) hz['cd' + c[1]] ??= f;
+  }
+  // weeks: song order and week names
+  const weekOf = {}, order = [];
+  for (const [k, f] of [...files].filter(([k]) => /^(assets|mods)\/weeks\/[^\/]+\.json$/.test(k)).sort()) {
+    try { const w = await readJson(f); for (const s of w.songs || []) { const n = slug(s[0]); if (!weekOf[n]) { weekOf[n] = w.weekName || w.storyName || ''; order.push(n); } } } catch (e) {}
+  }
+  // charts: every json under data/<song>/ that really is a chart
+  const cand = [...files].filter(([k]) => /^(assets|mods)\/data\/[^\/]+\/[^\/]+\.json$/.test(k) && !/\/(events|dialogue[^\/]*|message)\.json$/.test(k));
+  let done = 0;
+  for (const [k, f] of cand) {
+    status(`Reading charts… ${++done}/${cand.length}`);
+    const [, root, folder, base] = k.match(/^(assets|mods)\/data\/([^\/]+)\/([^\/]+)\.json$/);
+    let j; try { j = await readJson(f); } catch (e) { continue; }
+    const s = j && (j.song && typeof j.song === 'object' ? j.song : j);
+    if (!s || !Array.isArray(s.notes)) continue;
+    const diff = base === folder ? 'normal' : base.startsWith(folder + '-') ? base.slice(folder.length + 1) : base;
+    const song = songs[folder] ??= { charts:{}, name:s.song || folder, folder };
+    song.charts[diff] = f;
+    song.events ??= files.get(`${root}/data/${folder}/events.json`);
+    for (const nm of [folder, slug(s.song)]) for (const r of ['assets','mods']) {
+      song.inst ??= files.get(`${r}/songs/${nm}/inst.ogg`) || files.get(`${r}/songs/${nm}/inst.mp3`);
+      song.voices ??= files.get(`${r}/songs/${nm}/voices.ogg`) || files.get(`${r}/songs/${nm}/voices.mp3`);
+    }
+  }
+  if (loose.inst && Object.keys(loose.charts).length) songs['your files'] = { ...loose, name:'Your files', folder:'your files' };
+  for (const k of Object.keys(songs)) if (!songs[k].inst) delete songs[k];
+  lib = { files, songs, hz, hzb:null, weekOf };
+  cache = new Map(); bufs = {};
+  const names = Object.keys(songs).sort((a, b) => (order.indexOf(a) + 1 || 999) - (order.indexOf(b) + 1 || 999) || a.localeCompare(b));
+  if (!names.length) { status('No playable songs found. Pick the folder that has the game .exe in it.'); $('opts').classList.add('hide'); return; }
+  $('song').innerHTML = names.map(n => `<option value="${esc(n)}">${esc(songs[n].name)}${weekOf[n] ? ' (' + esc(weekOf[n].trim()) + ')' : ''}</option>`).join('');
+  if (songs['censory-overload']) $('song').value = 'censory-overload';
+  fillDiffs();
+  const saws = SOUNDS.filter(n => hz[n]).length;
+  status(`Found ${names.length} songs from ${cand.length} chart files. Sounds: ${saws}/${SOUNDS.length}. Sprites: ${files.size ? 'yes' : 'no (pick the folder for them)'}.`);
+  $('opts').classList.remove('hide');
+}
+function fillDiffs() {
+  const s = lib.songs[$('song').value]; if (!s) return;
+  const order = ['easy','normal','hard','harder'], rk = d => order.includes(d) ? order.indexOf(d) : 99;
+  const ds = Object.keys(s.charts).sort((a, b) => rk(a) - rk(b) || a.localeCompare(b));
+  $('diff').innerHTML = ds.map(d => `<option value="${esc(d)}">${esc(d.toUpperCase())}</option>`).join('');
+  $('diff').value = ds.includes('harder') ? 'harder' : ds[ds.length - 1];
+  showInfo();
+}
+async function showInfo() {
+  const s = lib.songs[$('song').value], f = s && s.charts[$('diff').value]; if (!f) return;
+  try {
+    const j = await readJson(f), c = j.song || j;
+    let notes = 0, hurt = 0, saws = 0;
+    for (const sec of c.notes) for (const n of sec.sectionNotes || []) if (n[1] >= 0 && n[1] <= 7) { notes++; if (TYPES[n[3]] && TYPES[n[3]].avoid) hurt++; }
+    for (const e of c.events || []) for (const x of e[1] || []) if (x[0] === 'KB_AttackFire' || (x[0] === 'KB_AttackFireDOUBLE' && !x[1])) saws++;
+    $('info').textContent = `${c.bpm} BPM, speed ${c.speed}, ${notes} notes (${hurt} to avoid), ${saws} saws${c.dodgeEnabled === false ? ', dodging off' : ''}. ${c.player1} vs ${c.player2}, stage ${c.stage || 'stage'}.`;
+  } catch (e) { $('info').textContent = ''; }
+}
+$('dir').onchange = e => scan(e.target.files);
+$('files').onchange = e => scan(e.target.files);
+$('zip').onchange = async e => {
+  const z = e.target.files[0]; if (!z) return;
+  try {
+    status('Reading the zip…');
+    const list = await readZip(z), entries = [];
+    for (const en of list) { const m = en.path.replace(/\\/g, '/').toLowerCase().match(/(?:^|\/)((?:assets|mods)\/.*)$/); if (m) entries.push([m[1], en]); }
+    if (!entries.length) { status('That zip has no assets or mods folder in it.'); return; }
+    await build(entries);
+  } catch (err) { status('Could not read that zip: ' + err.message); }
+};
+// reads a .zip straight from disk, one file at a time (Chrome unzips each file as it's needed)
+async function readZip(file) {
+  const size = file.size, tl = Math.min(size, 65557);
+  const tail = new DataView(await file.slice(size - tl).arrayBuffer());
+  let e = -1; for (let i = tail.byteLength - 22; i >= 0; i--) if (tail.getUint32(i, true) === 0x06054b50) { e = i; break; }
+  if (e < 0) throw new Error('not a zip file');
+  let count = tail.getUint16(e + 10, true), cdSize = tail.getUint32(e + 12, true), cdOff = tail.getUint32(e + 16, true);
+  if ((cdOff === 0xffffffff || count === 0xffff) && e >= 20 && tail.getUint32(e - 20, true) === 0x07064b50) {
+    const zo = Number(tail.getBigUint64(e - 12, true)), z = new DataView(await file.slice(zo, zo + 56).arrayBuffer());
+    count = Number(z.getBigUint64(32, true)); cdSize = Number(z.getBigUint64(40, true)); cdOff = Number(z.getBigUint64(48, true));
+  }
+  const cd = new DataView(await file.slice(cdOff, cdOff + cdSize).arrayBuffer()), td = new TextDecoder(), out = [];
+  let p = 0;
+  for (let n = 0; n < count && p + 46 <= cd.byteLength; n++) {
+    if (cd.getUint32(p, true) !== 0x02014b50) break;
+    const method = cd.getUint16(p + 10, true); let cs = cd.getUint32(p + 20, true), us = cd.getUint32(p + 24, true);
+    const nl = cd.getUint16(p + 28, true), xl = cd.getUint16(p + 30, true), cl = cd.getUint16(p + 32, true); let off = cd.getUint32(p + 42, true);
+    const name = td.decode(new Uint8Array(cd.buffer, cd.byteOffset + p + 46, nl));
+    let q = p + 46 + nl; const xe = q + xl;
+    while (q + 4 <= xe) { const id = cd.getUint16(q, true), sz = cd.getUint16(q + 2, true);
+      if (id === 1) { let r = q + 4; if (us === 0xffffffff) { us = Number(cd.getBigUint64(r, true)); r += 8; } if (cs === 0xffffffff) { cs = Number(cd.getBigUint64(r, true)); r += 8; } if (off === 0xffffffff) off = Number(cd.getBigUint64(r, true)); }
+      q += 4 + sz; }
+    p = xe + cl;
+    if (!name.endsWith('/')) out.push(new ZipEntry(file, name, method, cs, us, off));
+  }
+  return out;
+}
+class ZipEntry {
+  constructor(zf, path, method, cs, us, off) { Object.assign(this, { zf, path, name:path.split('/').pop(), method, cs, size:us, off }); }
+  async blob() {
+    const h = new DataView(await this.zf.slice(this.off, this.off + 30).arrayBuffer());
+    const st = this.off + 30 + h.getUint16(26, true) + h.getUint16(28, true), raw = this.zf.slice(st, st + this.cs);
+    if (this.method === 0) return raw;
+    if (this.method === 8) return new Response(raw.stream().pipeThrough(new DecompressionStream('deflate-raw'))).blob();
+    throw new Error('unsupported zip compression in ' + this.name);
+  }
+  async text() { return (await this.blob()).text(); }
+  async arrayBuffer() { return (await this.blob()).arrayBuffer(); }
+}
+const blobOf = f => f instanceof Blob ? f : f.blob();
+$('song').onchange = fillDiffs;
+$('diff').onchange = showInfo;
+
+/* ---------- the mod's pixel font ---------- */
+async function loadFont() {
+  const f = file('mods/fonts/pixelfont.ttf'); if (!f) return null;
+  try { const ff = new FontFace('pixelfont', await f.arrayBuffer()); await ff.load(); document.fonts.add(ff); return 'pixelfont'; } catch (e) { return null; }
+}
+
+/* ---------- remember the last song so it's there next time ---------- */
+function idb() { return new Promise((res, rej) => { const r = indexedDB.open('qt-player', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
+async function idbSet(k, v) { const db = await idb(); return new Promise((res, rej) => { const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').put(v, k); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); }
+async function idbGet(k) { const db = await idb(); return new Promise((res, rej) => { const r = db.transaction('kv').objectStore('kv').get(k); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
+async function saveLast(song, diff) {
+  try {
+    const keep = [...lib.files].filter(([k]) => /^(assets|mods)\/weeks\//.test(k) || k.startsWith(`assets/data/${song}/`) || k.startsWith(`mods/data/${song}/`));
+    const all = new Map([...keep, ...used]);
+    const ents = [];
+    for (const [k, f] of all) if (k && f) ents.push([k, f instanceof Blob ? f : new File([await f.blob()], f.name)]);
+    await idbSet('last', { song, diff, keys:opt.keys, entries:ents });
+  } catch (e) {}
+}
+(async () => {
+  try {
+    const last = await idbGet('last'); if (!last || !last.entries || !last.entries.length) return;
+    const b = $('again'); b.classList.remove('hide');
+    b.textContent = `Play ${last.song} ${String(last.diff).toUpperCase()} again (no folder needed)`;
+    b.onclick = async () => {
+      ctx ??= new (window.AudioContext || window.webkitAudioContext)(); ctx.resume();
+      b.disabled = true; status('Loading your saved files…');
+      await build(last.entries);
+      if (lib.songs[last.song]) { $('song').value = last.song; fillDiffs(); if ([...$('diff').options].some(o => o.value === last.diff)) $('diff').value = last.diff; }
+      if (last.keys) $('keys').value = last.keys;
+      b.disabled = false; $('start').click();
+    };
+  } catch (e) {}
+})();
+
+/* ---------- sprites (Sparrow sheets: .png + .xml) ---------- */
+const file = rel => { const k = rel.toLowerCase(), f = lib.files.get(k); if (f) used.set(k, f); return f; };
+const imgFile = p => file('mods/images/' + p) || file('assets/shared/images/' + p) || file('assets/images/' + p);
+function loadImg(p) {
+  const k = 'img:' + p;
+  if (!cache.has(k)) { const f = imgFile(p); cache.set(k, f ? blobOf(f).then(b => createImageBitmap(b)).catch(() => null) : Promise.resolve(null)); }
+  return cache.get(k);
+}
+function loadAtlas(p) {
+  const k = 'at:' + p;
+  if (cache.has(k)) return cache.get(k);
+  const pr = (async () => {
+    const pf = imgFile(p + '.png'), xf = imgFile(p + '.xml'); if (!pf || !xf) return null;
+    const pb = await blobOf(pf), hd = new DataView(await pb.slice(0, 24).arrayBuffer());
+    const W0 = hd.getUint32(16), H0 = hd.getUint32(20), q = opt.lq && Math.max(W0, H0) > 2048 ? 0.5 : 1;
+    const [bmp, txt] = await Promise.all([q < 1 ? createImageBitmap(pb, { resizeWidth:Math.max(1, Math.round(W0 * q)), resizeHeight:Math.max(1, Math.round(H0 * q)), resizeQuality:'low' }) : createImageBitmap(pb), xf.text()]);
+    const doc = new DOMParser().parseFromString(txt, 'application/xml');
+    const fr = [...doc.getElementsByTagName('SubTexture')].map((s, i) => {
+      const a = k => parseFloat(s.getAttribute(k)) || 0, w = a('width'), h = a('height');
+      return { n:s.getAttribute('name') || '', i, x:a('x'), y:a('y'), w, h, fx:a('frameX'), fy:a('frameY'), fw:a('frameWidth') || w, fh:a('frameHeight') || h };
+    }).map(f => { f.w = Math.min(f.w, W0 - f.x); f.h = Math.min(f.h, H0 - f.y); return f; }).filter(f => f.w > 0 && f.h > 0);
+    return { bmp, fr, memo:{}, q };
+  })().catch(() => null);
+  cache.set(k, pr); return pr;
+}
+function frames(at, prefix, idx) {
+  if (!at) return [];
+  const key = prefix + '|' + (idx || ''); if (at.memo[key]) return at.memo[key];
+  const num = f => parseInt(f.n.slice(prefix.length)) || 0;
+  let l = at.fr.filter(f => f.n.startsWith(prefix) && /^\s*\d*$/.test(f.n.slice(prefix.length)));
+  l.sort((a, b) => num(a) - num(b) || a.i - b.i);
+  if (idx && idx.length) l = idx.map(i => l.find(f => num(f) === i)).filter(Boolean);
+  return at.memo[key] = l;
+}
+function frameAt(list, t0, fps, loop) {
+  if (!list.length) return null;
+  const i = Math.floor((clock - t0) / 1000 * fps);
+  return list[loop ? ((i % list.length) + list.length) % list.length : Math.max(0, Math.min(i, list.length - 1))];
+}
+function dframe(at, f, x, y, s, flip, sy) {
+  if (!at || !f) return; sy ??= s;
+  const q = at.q || 1;
+  if (!flip) { g.drawImage(at.bmp, f.x * q, f.y * q, f.w * q, f.h * q, x - f.fx * s, y - f.fy * sy, f.w * s, f.h * sy); return; }
+  g.save(); g.translate(x + f.fw * s, 0); g.scale(-1, 1);
+  g.drawImage(at.bmp, f.x * q, f.y * q, f.w * q, f.h * q, -f.fx * s, y - f.fy * sy, f.w * s, f.h * sy); g.restore();
+}
+const dcenter = (at, f, cx, cy, s, flip) => f && dframe(at, f, cx - f.fw * s / 2, cy - f.fh * s / 2, s, flip);
+
+/* ---------- characters (from the mod's character .json) ---------- */
+async function loadChar(name, isPlayer) {
+  if (!name) return null;
+  const jf = file('mods/characters/' + name + '.json') || file('assets/characters/' + name + '.json'); if (!jf) return null;
+  let j; try { j = await readJson(jf); } catch (e) { return null; }
+  const at = await loadAtlas(j.image); if (!at) return null;
+  const anims = {};
+  for (const a of j.animations || []) { const fr = frames(at, a.name, a.indices); if (fr.length) anims[a.anim] = { fr, fps:a.fps || 24, loop:!!a.loop, off:a.offsets || [0,0] }; }
+  if (isPlayer && !name.startsWith('bf')) for (const m of ['', 'miss']) { const L = anims['singLEFT' + m]; anims['singLEFT' + m] = anims['singRIGHT' + m]; anims['singRIGHT' + m] = L; }
+  const s = j.scale || 1, base = anims.idle || anims.danceLeft || Object.values(anims)[0];
+  const icon = await loadImg('icons/icon-' + j.healthicon + '.png') || await loadImg('icons/' + j.healthicon + '.png');
+  return { name, at, anims, s, flip:isPlayer ? !j.flip_x : !!j.flip_x, x:0, y:0, cur:'', t0:0, until:-1e9, side:false, sfx:'',
+           lr:!!anims.danceLeft, pos:j.position || [0,0], cam:j.camera_position || [0,0], icon, color:j.healthbar_colors || [150,150,150],
+           sing:j.sing_duration || 4, smooth:!j.no_antialiasing, w:base ? base.fr[0].fw * s : 0, h:base ? base.fr[0].fh * s : 0 };
+}
+function play(c, a) { if (c && c.anims[a]) { c.cur = a; c.t0 = clock; return true; } return false; }
+function dance(c) {
+  if (!c || clock < c.until) return;
+  if (c.lr) { c.side = !c.side; const a = (c.side ? 'danceRight' : 'danceLeft'); play(c, a + c.sfx) || play(c, a); }
+  else play(c, 'idle' + c.sfx) || play(c, 'idle');
+}
+function sing(c, lane, miss, alt) {
+  if (!c) return;
+  const a = 'sing' + DIRS[lane];
+  (miss && play(c, a + 'miss')) || (alt && play(c, a + '-alt')) || play(c, a);
+  c.until = clock + crochetAt(now()) / 4 * c.sing * 1.1;
+}
+function animDone(c) { const a = c.anims[c.cur]; return !a || (clock - c.t0) / 1000 * a.fps >= a.fr.length; }
+function drawChar(c) {
+  if (!c) return; const a = c.anims[c.cur]; if (!a) return;
+  g.imageSmoothingEnabled = c.smooth;
+  dframe(c.at, frameAt(a.fr, c.t0, a.fps, a.loop), c.x - a.off[0], c.y - a.off[1], c.s, c.flip);
+  g.imageSmoothingEnabled = true;
+}
+const mid = c => [c.x + c.w / 2, c.y + c.h / 2];
+
+/* ---------- reading the chart JSON (+ events.json) ---------- */
+function parse(j, ej) {
+  const s = j.song && typeof j.song === 'object' ? j.song : j;
+  const skin = s.arrowSkin || 'NOTE_assets';
+  const notes = [], opp = [], rawEv = [];
+  const secs = [], bpmMap = []; let t = 0, bpm = +s.bpm || 120, beat = 0;
+  bpmMap.push({ t:0, bpm, beat:0 });
+  for (const sec of s.notes || []) {
+    if (sec.changeBPM && +sec.bpm > 0 && +sec.bpm !== bpm) { bpm = +sec.bpm; bpmMap.push({ t, bpm, beat }); }
+    const beats = +sec.sectionBeats || (+sec.lengthInSteps || 16) / 4;
+    secs.push({ t, must:!!sec.mustHitSection, gf:!!sec.gfSection, alt:!!sec.altAnim });
+    for (const n of sec.sectionNotes || []) {
+      const d = +n[1];
+      if (d < 0 || typeof n[2] === 'string') { rawEv.push([+n[0], [[n[2], n[3], n[4]]]]); continue; }
+      if (!(d >= 0 && d <= 7)) continue;
+      const mine = d > 3 ? !sec.mustHitSection : !!sec.mustHitSection;
+      const ty = TYPES[n[3]] || {};
+      (mine ? notes : opp).push({ t:+n[0], lane:d % 4, len:Math.max(0, +n[2] || 0), type:n[3], ...ty,
+        tex:ty.tex ? ty.tex.replace('*', skin) : null, alt:!!sec.altAnim, gf:ty.gf || (!!sec.gfSection && !mine) });
+    }
+    t += beats * 60000 / bpm; beat += beats;
+  }
+  for (const src of [s, ej && (ej.song || ej)]) {
+    if (!src) continue;
+    for (const ev of src.events || []) rawEv.push(ev);
+    if (src !== s) for (const sec of src.notes || []) for (const n of sec.sectionNotes || []) if (+n[1] < 0) rawEv.push([+n[0], [[n[2], n[3], n[4]]]]);
+  }
+  const seen = new Set(), events = [];
+  for (const ev of rawEv) for (const sub of ev[1] || []) {
+    const e = { t:+ev[0], name:String(sub[0] ?? ''), v1:String(sub[1] ?? ''), v2:String(sub[2] ?? '') };
+    const k = `${e.t.toFixed(1)}|${e.name}|${e.v1}|${e.v2}`; if (!e.name || seen.has(k)) continue; seen.add(k); events.push(e);
+  }
+  const alerts = [], fires = [], fx = [];
+  for (const e of events) {
+    const v1 = e.v1.toLowerCase();
+    if (e.name === 'KB_Alert') { const c = Math.max(1, Math.min(4, parseInt(v1) || 1)); alerts.push({ t:e.t, c, snd:ALERT_SND[c] }); }
+    else if (e.name === 'KB_AlertDouble') alerts.push({ t:e.t, c:2, snd:'alertdouble' });
+    else if (e.name === 'KB_AttackFire') fires.push({ t:e.t, snd:{double:'attack-double',triple:'attack-triple',quadruple:'attack-quadruple'}[v1] || 'attack' });
+    else if (e.name === 'KB_AttackFireDOUBLE' && v1 === '') fires.push({ t:e.t, snd:'attack-double' });
+    else fx.push(e);
+  }
+  const by = (a, b) => a.t - b.t;
+  [notes, opp, alerts, fires, fx].forEach(a => a.sort(by));
+  const chars = { bf:new Set(), dad:new Set(), gf:new Set() };
+  for (const e of fx) if (e.name === 'Change Character') { const k = slot(e.v1); if (k) chars[k].add(e.v2); }
+  return { notes, opp, alerts, fires, fx, secs, bpmMap, speed:+s.speed || 2, dodge:s.dodgeEnabled !== false,
+           name:s.song || '', p1:s.player1 || 'bf', p2:s.player2 || 'dad', gf:s.gfVersion || s.player3 || 'gf', stage:s.stage || 'stage',
+           skin, splash:s.splashSkin || 'noteSplashes', chars, needsVoices:s.needsVoices !== false };
+}
+function slot(v) { v = String(v).toLowerCase().trim(); return ['bf','boyfriend','1'].includes(v) ? 'bf' : ['gf','girlfriend','2'].includes(v) ? 'gf' : ['dad','opponent','0'].includes(v) ? 'dad' : null; }
+function seg(t) { let s = chart.bpmMap[0]; for (const m of chart.bpmMap) { if (m.t <= t) s = m; else break; } return s; }
+const crochetAt = t => 60000 / (chart ? seg(t).bpm : 120);
+const beatAt = t => { const s = seg(t); return s.beat + (t - s.t) / (60000 / s.bpm); };
+function secAt(t) { let r = chart.secs[0] || { must:false }; for (const s of chart.secs) { if (s.t <= t) r = s; else break; } return r; }
+
+/* ---------- stage: from the stage .json and its .lua script ---------- */
+async function loadStage(c) {
+  const sf = file('assets/stages/' + c.stage + '.json') || file('mods/stages/' + c.stage + '.json');
+  let st = {}; try { if (sf) st = await readJson(sf); } catch (e) {}
+  const lua = file('mods/stages/' + c.stage + '.lua') || file('assets/stages/' + c.stage + '.lua');
+  const sprites = [];
+  if (lua) {
+    const src = (await lua.text()).replace(/--.*$/gm, ''), byTag = {};
+    const args = s => [...s.matchAll(/'([^']*)'|"([^"]*)"|(-?[\d.]+)|(true|false)/g)].map(m => m[1] ?? m[2] ?? (m[3] !== undefined ? +m[3] : m[4] === 'true'));
+    for (const m of src.matchAll(/(\w+)\s*\(([^()]*)\)/g)) {
+      const fn = m[1], a = args(m[2]), sp = byTag[a[0]];
+      if (fn === 'makeLuaSprite' || fn === 'makeAnimatedLuaSprite') byTag[a[0]] = { tag:a[0], img:a[1], x:a[2] || 0, y:a[3] || 0, anim:fn === 'makeAnimatedLuaSprite', sx:1, sy:1, sf:[1,1], alpha:1, angle:0, vis:true };
+      else if (!sp) continue;
+      else if (fn === 'addAnimationByPrefix') sp.prefix ??= a[2], sp.fps ??= a[3] || 24;
+      else if (fn === 'setScrollFactor') sp.sf = [a[1] ?? 1, a[2] ?? 1];
+      else if (fn === 'scaleObject') { sp.sx = a[1] ?? 1; sp.sy = a[2] ?? sp.sx; }
+      else if (fn === 'setProperty') { const p = String(a[0]).split('.')[1]; const v = a[1]; if (p === 'angle') sp.angle = v; else if (p === 'alpha') sp.alpha = v; else if (p === 'visible') sp.vis = v; }
+      else if (fn === 'doTweenAlpha') { const t2 = byTag[a[1]]; if (t2) t2.alpha = a[2]; }
+      else if (fn === 'addLuaSprite') { sp.front = !!a[1]; sprites.push(sp); }
+    }
+    if (!sprites.length) sprites.push(...Object.values(byTag));
+  } else if (/^street/.test(c.stage) && imgFile('hazard/qt-port/stage/streetBack.png')) {
+    // the QT street stages (built in code by the game) from hazard/qt-port/stage
+    const cute = c.stage === 'street-cute' && imgFile('hazard/qt-port/stage/streetBackCute.png') ? 'Cute' : '';
+    const base = { sf:[.9,.9], sx:1, sy:1, alpha:1, angle:0, vis:true };
+    sprites.push({ ...base, tag:'back', img:'hazard/qt-port/stage/streetBack' + cute, x:-750, y:-145, bg:0 },
+                 { ...base, tag:'back', img:'hazard/qt-port/stage/streetBackError', x:-750, y:-145, bg:1 },
+                 { ...base, tag:'back', img:'hazard/qt-port/stage/streetError', x:-750, y:-145, bg:2 },
+                 { ...base, tag:'front', img:'hazard/qt-port/stage/streetFront' + cute, x:-820, y:710, sx:1.15, sy:1.15, bg:0 },
+                 { ...base, tag:'front', img:'hazard/qt-port/stage/streetFrontError', x:-820, y:710, sx:1.15, sy:1.15, bg:12 },
+                 { ...base, tag:'tv', img:'hazard/qt-port/stage/TV_V5', anim:true, tv:true, prefix:'', fps:24, x:-62, y:540, sx:1.2, sy:1.2, sf:[.89,.89] });
+  } else if (/^street/.test(c.stage)) {
+    sprites.push({ img:'DorFA/darkStreetBG', x:-600, y:-200, sf:[.9,.9], sx:1, sy:1, alpha:1, angle:0, vis:true },
+                 { img:'DorFA/tvs', anim:true, prefix:'normal', fps:12, x:-50, y:300, sf:[.9,.9], sx:1, sy:1, alpha:1, angle:0, vis:true },
+                 { img:'DorFA/darkStreetFloor', x:-650, y:650, sf:[.9,.9], sx:1.1, sy:1.1, alpha:1, angle:0, vis:true });
+  }
+  for (const sp of sprites) {
+    if (sp.anim) { sp.at = await loadAtlas(sp.img); sp.fr = sp.at ? frames(sp.at, sp.prefix || '') : []; }
+    else sp.bmp = await loadImg(sp.img + '.png');
+    if (sp.tv && sp.at) {
+      // TV screens: find each animation in TV_V5 by name
+      const names = [...new Set(sp.at.fr.map(f => f.n.replace(/\d+$/, '')))];
+      const find = re => names.find(n => re.test(n));
+      sp.tvAnims = { idle:find(/idle/i), eye:find(/brutal|eye/i), instructions:find(/instruction/i), gl:find(/good|luck/i), drop:find(/drop/i),
+                     alert:find(/attention|alert/i), error:find(/error/i), '404':find(/blue|404/i), sus:find(/sus/i), watch:find(/watch/i) };
+      sp.prefix = sp.tvAnims.idle || names[0] || ''; sp.fr = frames(sp.at, sp.prefix); sp.t0 = 0;
+    }
+  }
+  const ok = sprites.filter(s => s.vis && s.alpha > 0 && (s.bmp || (s.fr && s.fr.length)));
+  const hasBg = { 0:true, 1:ok.some(s => s.bg === 1), 2:ok.some(s => s.bg === 2), frontErr:ok.some(s => s.bg === 12) };
+  return { st, sprites:ok, hasBg, tv:ok.find(s => s.tv) };
+}
+function drawSprite(sp, W, H, Z, cx, cy) {
+  if (opt.lq && sp.tv) return;
+  if (sp.bg !== undefined) {
+    const b = S.bgState || 0, hb = W8.stage.hasBg;
+    if (sp.tag === 'back') { if (sp.bg !== (hb[b] ? b : 0)) return; }
+    else if ((sp.bg === 12) !== (b !== 0 && hb.frontErr)) return;
+  }
+  world(W, H, Z, cx, cy, sp.sf[0], sp.sf[1]);
+  g.globalAlpha = sp.alpha;
+  const f = sp.fr ? frameAt(sp.fr, sp.t0 || 0, sp.fps || 24, sp.loop !== false) : null;
+  const w = (f ? f.fw : sp.bmp.width) * sp.sx, h = (f ? f.fh : sp.bmp.height) * sp.sy;
+  if (sp.angle) { g.translate(sp.x + w / 2, sp.y + h / 2); g.rotate(sp.angle * Math.PI / 180); g.translate(-sp.x - w / 2, -sp.y - h / 2); }
+  if (f) dframe(sp.at, f, sp.x, sp.y, sp.sx, false, sp.sy); else g.drawImage(sp.bmp, sp.x, sp.y, w, h);
+  g.globalAlpha = 1;
+}
+
+async function loadWorld(c) {
+  const stage = await loadStage(c), st = stage.st;
+  const w = { zoom:st.defaultZoom || 0.9, stage, st, pos:{ bf:st.boyfriend || [770,100], dad:st.opponent || [100,100], gf:st.girlfriend || [400,130] }, pool:{} };
+  const make = async (name, k) => {
+    const key = k + ':' + name; if (w.pool[key] !== undefined) return w.pool[key];
+    const ch = await loadChar(name, k === 'bf');
+    if (ch) { ch.x = w.pos[k][0] + ch.pos[0]; ch.y = w.pos[k][1] + ch.pos[1]; }
+    return w.pool[key] = ch;
+  };
+  w.make = make;
+  [w.bf, w.dad, w.gf] = await Promise.all([make(c.p1, 'bf'), make(c.p2, 'dad'), st.hide_girlfriend ? null : make(c.gf, 'gf')]);
+  for (const k of ['bf','dad','gf']) for (const n of c.chars[k]) await make(n, k);
+  const sk = c.skin || 'NOTE_assets';
+  w.notes = await loadAtlas(sk) || await loadAtlas('NOTE_assets');
+  w.tex = {};
+  for (const n of [...c.notes, ...c.opp]) if (n.tex && !(n.tex in w.tex)) w.tex[n.tex] = await loadAtlas(n.tex) || await loadAtlas('HURTNOTE_assets');
+  w.splash = await loadAtlas(c.splash) || await loadAtlas('noteSplashes');
+  w.kbSaw = await loadAtlas('hazard/qt-port/attackv6');
+  w.alertNew = await loadAtlas('hazard/qt-port/attack_alert_NEW');
+  w.sawKill = await loadAtlas('hazard/qt-port/sawkillanimation2');
+  if (c.fx.some(e => e.name === 'Gas Effect')) { w.gas = await loadAtlas('hazard/qt-port/stage/Gas_Release'); w.gasPrefix = w.gas ? (w.gas.fr[0].n.replace(/\d+$/, '')) : ''; }
+  w.count = {}; for (const n of ['3','2','1','go']) w.count[n] = await loadImg('3,2,1,go/' + n + '.png');
+  w.saw = w.kbSaw ? null : await loadAtlas('DorFA/saw'); w.alert = await loadAtlas('characters/alert');
+  w.hb = await loadImg('healthBar.png'); w.rate = {}; w.nums = [];
+  for (const r of ['sick','good','bad','shit']) w.rate[r] = await loadImg(r + '.png');
+  for (let i = 0; i < 10; i++) w.nums[i] = await loadImg('num' + i + '.png');
+  return w;
+}
+
+$('start').onclick = async () => {
+  try {
+    ctx ??= new (window.AudioContext || window.webkitAudioContext)();
+    await ctx.resume();
+    const key = $('song').value, s = lib.songs[key], d = $('diff').value;
+    status('Loading the chart and the music…');
+    const ej = s.events ? await readJson(s.events).catch(() => null) : null;
+    chart = parse(await readJson(s.charts[d]), ej);
+    const dec = async f => f ? await ctx.decodeAudioData(await f.arrayBuffer()) : null;
+    if (bufs.key !== key) bufs = { key, inst:await dec(s.inst), voices:await dec(s.voices).catch(() => null) };
+    if (!lib.hzb) { lib.hzb = {}; for (const n of [...SOUNDS, 'cd3', 'cd2', 'cd1', 'cdgo']) if (lib.hz[n]) { try { lib.hzb[n] = await dec(lib.hz[n]); } catch (e) {} } }
+    status('Loading the sprites…');
+    used.set(...[...lib.files].find(([, f]) => f === s.charts[d]) || ['', null]);
+    for (const f of [s.inst, s.voices, s.events, ...Object.values(lib.hz)]) { const e = [...lib.files].find(([, x]) => x === f); if (e) used.set(...e); }
+    readOpts();
+    W8 = await loadWorld(chart);
+    W8.font = await loadFont();
+    saveLast(key, d);
+    opt.keys = $('keys').value; opt.diff = d;
+    try { localStorage.setItem('qtkeys', opt.keys); } catch (e) {}
+    status('');
+    $('setup').classList.add('hide');
+    document.activeElement && document.activeElement.blur();
+    begin();
+  } catch (e) { status('Could not load that: ' + e.message); }
+};
+
+/* ---------- audio ---------- */
+function sfx(name, at, vol = 0.8) {
+  const b = lib.hzb && lib.hzb[name]; if (!b || !S) return;
+  const src = ctx.createBufferSource(), gn = ctx.createGain();
+  src.buffer = b; gn.gain.value = vol; src.connect(gn).connect(ctx.destination);
+  src.start(Math.max(ctx.currentTime, at || 0));
+  const list = S.sfx; list.push(src);
+  src.onended = () => { const i = list.indexOf(src); if (i >= 0) list.splice(i, 1); };
+}
+function stopAudio() { if (!S) return; for (const s of [...S.src, ...S.sfx]) { try { s.stop(); } catch (e) {} } S.src = []; S.sfx = []; }
+
+/* ---------- game state ---------- */
+function begin() {
+  stopAudio();
+  for (const n of chart.notes) { n.hit = n.miss = n.done = false; }
+  const st = () => ({ a:'static', t0:0, hold:0 });
+  const [bf, dad, gf] = [W8.make(chart.p1, 'bf'), W8.make(chart.p2, 'dad'), W8.st.hide_girlfriend ? null : W8.make(chart.gf, 'gf')];
+  Promise.all([bf, dad, gf]).then(([a, b, c]) => { W8.bf = a; W8.dad = b; W8.gf = c; for (const ch of [a, b, c]) if (ch) { ch.sfx = ''; ch.until = -1e9; dance(ch); } });
+  S = { ni:0, oi:0, sa:0, sf:0, ai:0, fi:0, xi:0, health:1, score:0, misses:0, combo:0, hits:0, acc:0,
+        pop:null, dodgeT:-1e9, lastDodge:-1e9, dodgeMs:226, cool:100, alert:null, saw:null, shake:null, alarm:{}, gfSpeed:1, beat:-99,
+        gainMul:1, lossMul:1, drain:0, spd:{ from:1, to:1, t0:0, dur:0 },
+        held:[0,0,0,0], ps:[st(),st(),st(),st()], os:[st(),st(),st(),st()], holds:[], splashes:[],
+        dead:false, ended:false, paused:false, src:[], sfx:[], zoomAdd:0, hudAdd:0, iconS:1 };
+  S.start = ctx.currentTime + 5 * crochetAt(0) / 1000; S.tick = -1; S.cd = null;
+  S.gV = ctx.createGain(); S.gV.connect(ctx.destination);
+  for (const [b, out] of [[bufs.inst, ctx.destination], [chart.needsVoices ? bufs.voices : null, S.gV]]) {
+    if (!b) continue;
+    const a = ctx.createBufferSource(); a.buffer = b; a.connect(out); a.start(S.start); S.src.push(a);
+  }
+  S.len = bufs.inst ? bufs.inst.duration * 1000 : 0;
+  S.cam = null;
+  closeMenu();
+  if (ctx.state === 'suspended') ctx.resume();
+}
+const now = () => (ctx.currentTime - S.start) * 1000;
+const songT = () => S.dead ? S.deadAt : now();
+const laneOf = code => { let i = ARROWS.indexOf(code); if (i < 0) i = KEYSETS[opt.keys].indexOf(code); return i; };
+function camTarget(t) {
+  const sec = secAt(Math.max(0, t)), cs = W8.st;
+  if (sec.gf && W8.gf) { const [mx, my] = mid(W8.gf), o = cs.camera_girlfriend || [0,0]; return [mx + W8.gf.cam[0] + o[0], my + W8.gf.cam[1] + o[1]]; }
+  const c = sec.must ? W8.bf : W8.dad;
+  if (!c) return [640, 360];
+  const [mx, my] = mid(c);
+  if (sec.must) { const o = cs.camera_boyfriend || [0,0]; return [mx - 100 - c.cam[0] + o[0], my - 100 + c.cam[1] + o[1]]; }
+  const o = cs.camera_opponent || [0,0]; return [mx + 150 + c.cam[0] + o[0], my - 100 + c.cam[1] + o[1]];
+}
+function speedNow(t) { const s = S.spd; const p = s.dur > 0 ? Math.min(1, Math.max(0, (t - s.t0) / s.dur)) : 1; return chart.speed * (s.from + (s.to - s.from) * p); }
+
+function popRating(r) { S.pop = { r, t0:clock, combo:S.combo }; }
+function hurt(amount, lane, n) {
+  S.health -= amount * S.lossMul; S.misses++; S.combo = 0; S.gV.gain.value = 0;
+  if (lane >= 0) sing(W8.bf, lane, true); popRating(null);
+  if (n && n.sound) sfx(n.sound, 0, 0.5);
+}
+function miss(lane, n) { hurt(n && n.miss !== undefined ? n.miss : 0.0475, lane, n); }
+function hitNote(n, t) {
+  n.hit = true; S.ps[n.lane] = { a:'confirm', t0:clock, hold:0 };
+  if (n.avoid) { hurt(n.miss ?? .3, n.lane, n); return; }
+  const d = Math.abs(n.t - t);
+  const [r, sc, a] = d <= 45 ? ['sick',350,1] : d <= 90 ? ['good',200,.67] : d <= 135 ? ['bad',100,.34] : ['shit',50,0];
+  S.score += sc; S.hits++; S.acc += a; S.combo++;
+  S.health = Math.min(2, S.health + (n.gain ?? 0.023) * S.gainMul); S.gV.gain.value = 1;
+  popRating(r);
+  if (n.dodge) { sfx(n.sound, 0, 0.5); if (W8.bf && play(W8.bf, 'dodge')) W8.bf.until = clock + crochetAt(t); }
+  else if (n.gf) sing(W8.gf, n.lane); else if (!n.noAnim) sing(W8.bf, n.lane, false, n.alt);
+  if (r === 'sick' && opt.splash && !opt.lq) S.splashes.push({ lane:n.lane, t0:clock, v:1 + (Math.random() < .5 ? 1 : 0) });
+  if (n.len > 0) S.holds.push(n);
+}
+function press(lane) {
+  const t = now(); let best = null, bs = 1e9;
+  for (let i = S.ni; i < chart.notes.length; i++) {
+    const n = chart.notes[i]; if (n.t > t + 166) break;
+    if (n.lane !== lane || n.hit || n.miss) continue;
+    const d = Math.abs(n.t - t); if (d > 166) continue;
+    const sc = d + (n.avoid ? 1000 : 0); if (sc < bs) { bs = sc; best = n; }
+  }
+  if (best) hitNote(best, t); else S.ps[lane] = { a:'press', t0:clock, hold:0 };
+}
+function doDodge(t) { S.dodgeT = t; if (W8.bf && play(W8.bf, 'dodge')) W8.bf.until = clock + crochetAt(t); }
+function dodge() {
+  const t = now();
+  if (t - S.lastDodge < S.cool) return;
+  S.lastDodge = t; doDodge(t); sfx('dodge01', 0, 0.6);
+}
+function die(bySaw) {
+  S.dead = true; S.deadAt = now(); opt.blue++; S.sawDeath = bySaw && W8.sawKill ? clock : 0;
+  stopAudio(); sfx('sawbladehit', 0, 0.9);
+  if (W8.bf && play(W8.bf, 'firstDeath')) W8.bf.until = 1e12;
+  openMenu('BLUE BALLED', `Blueballed: ${opt.blue}`, [['Retry', begin], ['Exit to Menu', exitToSetup]]);
+}
+function target(v) { return { bf:W8.bf, dad:W8.dad, gf:W8.gf }[slot(v)] || null; }
+async function runEvent(e, t) {
+  const n = e.name, v1 = e.v1, v2 = e.v2, f1 = parseFloat(v1), f2 = parseFloat(v2);
+  if (n === 'Alarm Gradient') S.alarm[v1.toLowerCase() === 'left' ? 'l' : 'r'] = { t:e.t, a:f2 || .2 };
+  else if (n === 'Screen Shake') { const p = s => s.split(',').map(parseFloat); const [gd, gi] = p(v1), [hd, hi] = p(v2);
+    S.shake = { t:e.t, g:[(gd || 0) * 1000, gi || 0], h:[(hd || 0) * 1000, hi || 0] }; }
+  else if (n === 'Set GF Speed') S.gfSpeed = Math.max(1, parseInt(v1) || 1);
+  else if (n === 'Add Camera Zoom') { if (!opt.zoom) return; S.zoomAdd += isNaN(f1) ? .015 : f1; S.hudAdd += isNaN(f2) ? .03 : f2; }
+  else if (n === 'newDodgeCooldown') S.cool = (isNaN(f1) ? .1 : f1) * 1000;
+  else if (n === 'newDodgeDuration') S.dodgeMs = (isNaN(f1) ? .22625 : f1) * 1000;
+  else if (n === 'newLossMultiplier') S.lossMul = isNaN(f1) ? 1 : f1;
+  else if (n === 'newHealthGainMultiplier') S.gainMul = isNaN(f1) ? 1 : f1;
+  else if (n === 'newDadDrainHealthValue') S.drain = isNaN(f1) ? 0 : f1;
+  else if (n === 'Change Scroll Speed') { const cur = speedNow(t) / chart.speed; S.spd = { from:cur, to:isNaN(f1) ? 1 : f1, t0:e.t, dur:(isNaN(f2) ? 0 : f2) * 1000 }; }
+  else if (n === 'Play Animation') { const c = target(v2 || 'dad'); if (c && play(c, v1)) c.until = clock + (c.anims[v1].fr.length / c.anims[v1].fps) * 1000; }
+  else if (n === 'Hey!') { const w = v1.trim(); if (w !== '1' && W8.bf && play(W8.bf, 'hey')) W8.bf.until = clock + 600; if (w !== '0' && W8.gf && play(W8.gf, 'cheer')) W8.gf.until = clock + 600; }
+  else if (n === 'Alt Idle Animation') { const c = target(v1); if (c) c.sfx = v2; }
+  else if (n === 'KB_AttackPrepare' || (n === 'KB_AttackFireDOUBLE' && v1 === '1')) S.kb = { a:'prepare', t0:clock };
+  else if (n === 'streetTV state') {
+    const tv = W8.stage.tv; if (!tv || !tv.tvAnims) return;
+    const key = { '0':'idle', '1':'eye', '2':'instructions', '3':'gl', '4':'drop', '5':'alert', '05':'alert', '6':'error', '7':'404', '8':'sus', '9':'watch', '420':'sus' }[v1.trim()];
+    const pre = tv.tvAnims[key] || tv.tvAnims.idle; if (pre) { tv.prefix = pre; tv.fr = frames(tv.at, pre); tv.t0 = clock; tv.loop = key !== 'alert'; }
+  }
+  else if (n === 'Gas Effect') S.gas = { t0:clock, fps:/faster/i.test(v1) ? 96 : /fast/i.test(v1) ? 76 : /alt/i.test(v1) ? 36 : 30 };
+  else if (n === '3,2,1,go!-Counter') { const k = v1.trim().toLowerCase(); S.cd = { k, t0:clock }; if (/sound/.test(v2)) sfx('cd' + k, 0, 1); }
+  else if (n === 'streetBG state') S.bgState = Math.max(0, Math.min(2, parseInt(v1) || 0));
+  else if (n === 'Darkening effect') S.dark = v1.trim() === '1';
+  else if (n === 'Change Character' || n === 'Change Character OPTIONAL') {
+    const k = slot(v1); if (!k) return; const c = await W8.make(v2, k);
+    if (c) { c.sfx = ''; c.until = -1e9; W8[k] = c; dance(c); }
+  }
+}
+
+function update(dt) {
+  if (!S || S.paused) return;
+  if (S.dead) { const b = W8.bf; if (b && b.cur === 'firstDeath' && animDone(b)) play(b, 'deathLoop'); return; }
+  if (S.ended) return;
+  const t = now(), c = chart, cro = crochetAt(t);
+  if (!S.cam) S.cam = camTarget(0);
+  if (t < 0) { const tick = 4 + Math.floor(t / cro); if (tick !== S.tick && tick >= 0 && tick <= 3) { S.tick = tick; const k = ['3','2','1','go'][tick]; S.cd = { k, t0:clock }; sfx('cd' + k, 0, 1); } }
+  const beat = Math.floor(beatAt(t));
+  if (beat !== S.beat) {
+    S.beat = beat;
+    if (W8.gf && beat % S.gfSpeed === 0) dance(W8.gf);
+    dance(W8.dad); if (!S.held.some(Boolean) || opt.bot) dance(W8.bf);
+    S.iconS = 1.2; if (opt.zoom && beat >= 0 && beat % 4 === 0) { S.zoomAdd += 0.015; S.hudAdd += 0.03; }
+  }
+  while (S.sa < c.alerts.length && c.alerts[S.sa].t <= t + 200) { const a = c.alerts[S.sa++]; sfx(a.snd, S.start + a.t / 1000); }
+  while (S.sf < c.fires.length && c.fires[S.sf].t <= t + 200) { const f = c.fires[S.sf++]; sfx(f.snd, S.start + f.t / 1000); }
+  while (S.ai < c.alerts.length && c.alerts[S.ai].t <= t) S.alert = c.alerts[S.ai++];
+  while (S.xi < c.fx.length && c.fx[S.xi].t <= t) runEvent(c.fx[S.xi++], t);
+  while (S.oi < c.opp.length && c.opp[S.oi].t <= t) {
+    const n = c.opp[S.oi++]; S.os[n.lane] = { a:'confirm', t0:clock, hold:n.t + n.len };
+    if (n.gf) sing(W8.gf, n.lane); else if (!n.noAnim) sing(W8.dad, n.lane, false, n.alt);
+    if (S.drain > 0 && S.health > S.drain + 0.1) S.health -= S.drain;
+  }
+  for (let i = 0; i < 4; i++) {
+    const o = S.os[i];
+    if (o.a === 'confirm' && t > o.hold && clock - o.t0 > 150) S.os[i] = { a:'static', t0:clock, hold:0 };
+    else if (o.a === 'confirm' && t < o.hold && W8.dad) W8.dad.until = clock + cro * 0.6;
+  }
+  if (opt.bot) {
+    for (let i = S.ni; i < c.notes.length; i++) { const n = c.notes[i]; if (n.t > t) break; if (!n.hit && !n.miss && !n.avoid) hitNote(n, n.t); }
+    const f = c.fires[S.fi];
+    if (f && f.t - t <= 60 && !(S.dodgeT <= f.t && f.t <= S.dodgeT + S.dodgeMs)) doDodge(t);
+    for (let i = 0; i < 4; i++) if (S.ps[i].a === 'confirm' && clock - S.ps[i].t0 > 150 && !S.holds.some(n => n.lane === i)) S.ps[i] = { a:'static', t0:clock, hold:0 };
+  }
+  while (S.fi < c.fires.length && c.fires[S.fi].t <= t) {
+    const f = c.fires[S.fi++];
+    // botplay never gets sawed, even if a frame lags past the fire time
+    const ok = opt.bot || !c.dodge || (S.dodgeT <= f.t + 20 && f.t <= S.dodgeT + S.dodgeMs);
+    S.saw = { t:f.t, ok }; S.kb = { a:'fire', t0:clock };
+    if (!ok) {
+      if (opt.practice) { sfx('sawbladehit', 0, 0.9); S.health = Math.max(0.001, S.health - 0.5); S.misses++; S.combo = 0; popRating(null);
+        if (W8.bf && play(W8.bf, 'hurt')) W8.bf.until = clock + cro; }
+      else { die(true); return; }
+    }
+  }
+  for (let i = S.ni; i < c.notes.length; i++) {
+    const n = c.notes[i]; if (n.t > t - 166) break;
+    if (!n.hit && !n.miss) { n.miss = true; if (!n.avoid) miss(n.lane, n); }
+  }
+  while (S.ni < c.notes.length && (c.notes[S.ni].hit || c.notes[S.ni].miss)) S.ni++;
+  for (const n of S.holds) {
+    const end = n.t + n.len;
+    if (t >= end) { n.done = true; continue; }
+    if (opt.bot || S.held[n.lane]) { S.health = Math.min(2, S.health + 0.0006 * S.gainMul); if (W8.bf && !n.noAnim) W8.bf.until = clock + cro * 0.6; S.ps[n.lane] = { a:'confirm', t0:S.ps[n.lane].t0, hold:0 }; }
+    else if (t < end - 100) { n.done = true; miss(n.lane); }
+  }
+  S.holds = S.holds.filter(n => !n.done);
+  S.splashes = S.splashes.filter(s => clock - s.t0 < 400);
+  if (S.health <= 0) { if (opt.practice || opt.bot) S.health = 0.001; else { die(); return; } }
+  const [tx, ty] = camTarget(t), k = Math.min(1, dt / 1000 * 2.4 * (W8.st.camera_speed || 1));
+  S.cam[0] += (tx - S.cam[0]) * k; S.cam[1] += (ty - S.cam[1]) * k;
+  const who = secAt(Math.max(0, t)).must ? W8.bf : W8.dad, an = who ? who.cur : '', m = 0.3 * dt / (1000 / 60);
+  if (/dodge/.test(an)) { S.cam[0] += m; S.cam[1] += m; }
+  else if (/singLEFT/.test(an)) S.cam[0] -= m; else if (/singRIGHT/.test(an)) S.cam[0] += m;
+  else if (/singDOWN/.test(an)) S.cam[1] += m; else if (/singUP/.test(an)) S.cam[1] -= m;
+  const dz = Math.max(0, 1 - dt / 1000 * 3.125); S.zoomAdd *= dz; S.hudAdd *= dz;
+  S.iconS = 1 + (S.iconS - 1) * Math.max(0, 1 - dt / 1000 * 9);
+  if (S.len && t > S.len + 400) {
+    S.ended = true; stopAudio();
+    openMenu('SONG CLEARED', `Score ${S.score} | Misses ${S.misses} | ${ratingTxt()}`, [['Restart Song', begin], ['Exit to Menu', exitToSetup]]);
+  }
+}
+function ratingTxt() {
+  const tot = S.hits + S.misses; if (!tot) return 'Rating: ?';
+  const p = S.acc / tot * 100;
+  const r = [[100,'Perfect!!'],[90,'Sick!'],[80,'Great'],[70,'Good'],[60,'Meh'],[50,'Bruh'],[40,'Bad'],[20,'Shit'],[0,'You Suck!']].find(([m]) => p >= m)[1];
+  return `Rating: ${r} (${p.toFixed(2)}%)`;
+}
+
+/* ---------- menus ---------- */
+function openMenu(title, info, items) {
+  menu = { items, sel:0 };
+  $('mtitle').textContent = title; $('minfo').textContent = info || '';
+  $('mitems').innerHTML = '';
+  items.forEach(([label, fn], i) => {
+    const b = document.createElement('button'); b.textContent = label; b.tabIndex = -1;
+    b.onclick = () => fn(); b.onmouseenter = () => { menu.sel = i; markSel(); };
+    $('mitems').appendChild(b);
+  });
+  markSel(); $('menu').classList.remove('hide');
+}
+function markSel() { [...$('mitems').children].forEach((b, i) => b.classList.toggle('sel', i === menu.sel)); }
+function closeMenu() { menu = null; $('menu').classList.add('hide'); }
+function pauseMenu(sel = 0) {
+  openMenu('PAUSED', `${chart.name} ${opt.diff.toUpperCase()} | Blueballed: ${opt.blue}`, [
+    ['Resume', resume],
+    ['Restart Song', begin],
+    [`Botplay: ${opt.bot ? 'ON' : 'OFF'}`, () => { opt.bot = !opt.bot; pauseMenu(2); }],
+    [`Practice Mode: ${opt.practice ? 'ON' : 'OFF'}`, () => { opt.practice = !opt.practice; pauseMenu(3); }],
+    ['Exit to Menu', exitToSetup],
+  ]);
+  menu.sel = sel; markSel();
+}
+function pause() { S.paused = true; ctx.suspend(); pauseMenu(); }
+function resume() { S.paused = false; closeMenu(); S.held = [0,0,0,0]; ctx.resume(); }
+function exitToSetup() { if (S) { stopAudio(); if (ctx.state === 'suspended') ctx.resume(); } S = null; closeMenu(); $('setup').classList.remove('hide'); }
+
+/* ---------- keys ---------- */
+addEventListener('keydown', e => {
+  if (!S) return;
+  if (menu) {
+    if (['ArrowUp','KeyW'].includes(e.code)) { menu.sel = (menu.sel + menu.items.length - 1) % menu.items.length; markSel(); }
+    else if (['ArrowDown','KeyS'].includes(e.code)) { menu.sel = (menu.sel + 1) % menu.items.length; markSel(); }
+    else if (e.code === 'Enter' || e.code === 'NumpadEnter') menu.items[menu.sel][1]();
+    else if (e.code === 'Escape' && S.paused) resume();
+    else return;
+    e.preventDefault(); return;
+  }
+  if (e.code === 'Enter' || e.code === 'Escape') { e.preventDefault(); pause(); return; }
+  if (e.code === 'Space') { e.preventDefault(); if (!e.repeat && !opt.bot) dodge(); return; }
+  const lane = laneOf(e.code); if (lane < 0) return;
+  e.preventDefault(); if (e.repeat) return;
+  S.held[lane] = 1;
+  if (!opt.bot) press(lane);
+});
+addEventListener('keyup', e => {
+  if (!S) return; const lane = laneOf(e.code); if (lane < 0) return;
+  S.held[lane] = 0; if (!opt.bot) S.ps[lane] = { a:'static', t0:clock, hold:0 };
+});
+addEventListener('blur', () => { if (S && !S.paused && !S.dead && !S.ended) pause(); });
+
+/* ---------- drawing ---------- */
+function fit() { dpr = opt.lq ? 1 : Math.min(devicePixelRatio || 1, 2); cv.width = innerWidth * dpr; cv.height = innerHeight * dpr; }
+addEventListener('resize', fit); fit();
+function arrow(x, y, s, lane, fill, stroke) {
+  g.save(); g.translate(x, y); g.rotate(ROT[lane]); g.beginPath();
+  AP.forEach(([a, b], i) => i ? g.lineTo(a*s, b*s) : g.moveTo(a*s, b*s)); g.closePath();
+  g.fillStyle = fill; g.fill(); g.lineJoin = 'miter'; g.lineWidth = s * .08; g.strokeStyle = stroke; g.stroke(); g.restore();
+}
+function text(t, x, y, size, col, align = 'center', font = 'VT323') {
+  g.font = `${size}px "${font}", VT323, monospace`; g.textAlign = align; g.textBaseline = 'middle';
+  g.lineWidth = Math.max(3, size / 7); g.strokeStyle = '#000'; g.strokeText(t, x, y); g.fillStyle = col; g.fillText(t, x, y);
+}
+function world(W, H, Z, cx, cy, sfx = 1, sfy = sfx) {
+  g.setTransform(Z * dpr, 0, 0, Z * dpr, dpr * (W / 2 - (cx * sfx + 640 * (1 - sfx)) * Z), dpr * (H / 2 - (cy * sfy + 360 * (1 - sfy)) * Z));
+}
+function shakeOff(t, which) {
+  const s = S.shake; if (!s || S.dead) return [0, 0];
+  const [d, i] = s[which]; if (t - s.t > d || !i) return [0, 0];
+  return [(Math.random() * 2 - 1) * i * 1280, (Math.random() * 2 - 1) * i * 720];
+}
+function draw() {
+  const W = innerWidth, H = innerHeight;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.fillStyle = '#110b12'; g.fillRect(0, 0, W, H);
+  if (!S || !S.cam) return;
+  const t = songT(), c = chart, w = W8, Z = w.zoom * Math.max(W / 1280, H / 720) * (1 + S.zoomAdd);
+  const [gx, gy] = shakeOff(t, 'g'), cx = S.cam[0] + gx, cy = S.cam[1] + gy;
+
+  /* --- world: stage + characters --- */
+  if (S.dead) {
+    g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+    if (w.bf) {
+      const [mx, my] = mid(w.bf); world(W, H, Z, mx, my);
+      const kill = S.sawDeath ? frames(w.sawKill, 'kb_attack_animation_kill_moving') : [];
+      if (kill.length && (clock - S.sawDeath) / 1000 * 24 < kill.length) dcenter(w.sawKill, frameAt(kill, S.sawDeath, 24, false), mx, my, 1);
+      else drawChar(w.bf);
+    }
+    return;
+  }
+  for (const sp of w.stage.sprites) if (!sp.front) drawSprite(sp, W, H, Z, cx, cy);
+  world(W, H, Z, cx, cy);
+  drawChar(w.gf); drawChar(w.dad); drawChar(w.bf);
+  for (const sp of w.stage.sprites) if (sp.front) drawSprite(sp, W, H, Z, cx, cy);
+  world(W, H, Z, cx, cy);
+  if (w.kbSaw && S.kb && (c.dodge || c.fires.length)) {
+    const fr = frames(w.kbSaw, 'kb_attack_animation_' + S.kb.a), f = frameAt(fr, S.kb.t0, 24, false);
+    if (f && (clock - S.kb.t0) / 1000 * 24 < fr.length + 2) {
+      const sc = 1.15, off = S.kb.a === 'fire' ? 1600 : -333;
+      dframe(w.kbSaw, f, -860 - off + f.fw * (1 - sc) / 2, 615 + f.fh * (1 - sc) / 2, sc);
+    }
+  }
+  if (w.gas && S.gas && !opt.lq) {
+    const fr = frames(w.gas, w.gasPrefix), i = Math.floor((clock - S.gas.t0) / 1000 * S.gas.fps);
+    if (i < fr.length) for (const [gx2, ang] of [[-880, -31], [920, 31]]) {
+      const f = fr[i], sc = 2.5; world(W, H, Z, cx, cy, 0, 0); g.globalAlpha = .72;
+      const x0 = gx2 + f.fw * (1 - sc) / 2, y0 = -100 + f.fh * (1 - sc) / 2, mx = x0 + f.fw * sc / 2, my = y0 + f.fh * sc / 2;
+      g.translate(mx, my); g.rotate(ang * Math.PI / 180); g.translate(-mx, -my); dframe(w.gas, f, x0, y0, sc); g.globalAlpha = 1;
+    }
+    world(W, H, Z, cx, cy);
+  }
+  if (S.dark) { g.setTransform(dpr, 0, 0, dpr, 0, 0); g.fillStyle = 'rgba(0,0,0,.55)'; g.fillRect(0, 0, W, H); world(W, H, Z, cx, cy); }
+  if (S.saw && w.saw && w.bf && w.dad && t - S.saw.t > -150 && t - S.saw.t < 250) {
+    const p = (t - S.saw.t + 150) / 400, out = p < .4 ? p / .4 : 1 - (p - .4) / .6;
+    const [bx, by] = mid(w.bf), [dx] = mid(w.dad), f = frameAt(frames(w.saw, 'moving'), 0, 24, true);
+    if (f) { const sc = .8, tip = dx + (bx + 40 - dx) * out; dframe(w.saw, f, tip - f.fw * sc, by - f.fh * sc / 2, sc); }
+  }
+
+  /* --- screen effects --- */
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (opt.flash) for (const k of ['l','r']) {
+    const a = S.alarm[k]; if (!a) continue; const age = t - a.t; if (age > 320) continue;
+    const al = Math.min(.9, a.a * 3 * (1 - age / 320));
+    const gr = g.createLinearGradient(k === 'l' ? 0 : W, 0, k === 'l' ? W * .35 : W * .65, 0);
+    gr.addColorStop(0, `rgba(255,30,50,${al})`); gr.addColorStop(1, 'rgba(255,30,50,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, W, H);
+  }
+  if (opt.flash && S.saw && !S.saw.ok && t - S.saw.t < 350) { g.fillStyle = `rgba(255,0,30,${.35 * (1 - (t - S.saw.t) / 350)})`; g.fillRect(0, 0, W, H); }
+
+  /* --- HUD in the game's 1280x720 space --- */
+  const k = Math.min(W / 1280, H / 720) * (1 + S.hudAdd), [hx, hy] = shakeOff(t, 'h');
+  g.setTransform(dpr * k, 0, 0, dpr * k, dpr * (W / 2 - 640 * k + hx * k), dpr * (H / 2 - 360 * k + hy * k));
+  const px = 0.45 * speedNow(t), SY = opt.down ? 615 : 105, NS = .7, D = opt.down ? -1 : 1, mids = opt.mid;
+  const lane = (opp, i) => mids ? 640 + (i - 1.5) * 112 : (opp ? 92 : 732) + 112 * i + 55;
+  const strum = (opp, i, st) => {
+    const x = lane(opp, i);
+    if (!w.notes) { const lit = st.a === 'confirm'; arrow(x, SY, 100, i, lit ? COL[i] : '#3a3340', lit ? '#fff' : '#8f8697'); return; }
+    const pre = st.a === 'static' ? 'arrow' + DIRS[i] : DIRS[i].toLowerCase() + ' ' + st.a;
+    dcenter(w.notes, frameAt(frames(w.notes, pre), st.t0, 24, false) || frames(w.notes, 'arrow' + DIRS[i])[0], x, SY, NS);
+  };
+  const tail = (atl, i, x, y0, y1) => {
+    if (Math.abs(y1 - y0) < 1) return;
+    const top = Math.min(y0, y1), bot = Math.max(y0, y1), up = y1 < y0;
+    if (!atl) { g.globalAlpha = .6; g.fillStyle = COL[i]; g.fillRect(x - 16, top, 32, bot - top); g.globalAlpha = 1; return; }
+    const pc = frames(atl, NCOL[i] + ' hold piece')[0], en = frames(atl, i === 0 ? 'pruple end hold' : NCOL[i] + ' hold end')[0], q = atl.q || 1;
+    g.globalAlpha = .6;
+    const eh = Math.min(en ? en.h * NS : 0, bot - top);
+    if (!up) {
+      const ym = y1 - eh;
+      if (pc) g.drawImage(atl.bmp, pc.x * q, pc.y * q, pc.w * q, pc.h * q, x - pc.w * NS / 2, y0, pc.w * NS, ym - y0);
+      if (en) g.drawImage(atl.bmp, en.x * q, en.y * q, en.w * q, en.h * q, x - en.w * NS / 2, ym, en.w * NS, eh);
+    } else {
+      const ym = y1 + eh;
+      if (pc) g.drawImage(atl.bmp, pc.x * q, pc.y * q, pc.w * q, pc.h * q, x - pc.w * NS / 2, ym, pc.w * NS, y0 - ym);
+      if (en) { g.save(); g.translate(0, y1); g.scale(1, -1); g.drawImage(atl.bmp, en.x * q, en.y * q, en.w * q, en.h * q, x - en.w * NS / 2, -eh, en.w * NS, eh); g.restore(); }
+    }
+    g.globalAlpha = 1;
+  };
+  const note = (n, x, y) => {
+    if (n.invis) return;
+    const atl = n.tex ? w.tex[n.tex] : w.notes;
+    if (n.len > 0) tail(atl || w.notes, n.lane, x, y, y + D * n.len * px);
+    const f = atl && (frames(atl, NCOL[n.lane] + '0')[0] || frames(atl, NCOL[n.lane])[0]);
+    if (f) { dcenter(atl, f, x, y, NS); return; }
+    if (n.avoid) { arrow(x, y, 100, n.lane, '#111', '#ff2a3c'); g.strokeStyle = '#ff2a3c'; g.lineWidth = 8; g.beginPath(); g.moveTo(x-18,y-18); g.lineTo(x+18,y+18); g.moveTo(x+18,y-18); g.lineTo(x-18,y+18); g.stroke(); }
+    else arrow(x, y, 100, n.lane, COL[n.lane], '#000');
+  };
+  for (let i = 0; i < 4; i++) {
+    const pst = S.ps[i];
+    const st = !opt.bot && S.held[i] && pst.a === 'static' ? { a:'press', t0:pst.t0 } : pst;
+    if (!mids) strum(true, i, S.os[i]); strum(false, i, st);
+  }
+  for (const n of S.holds) tail(n.tex ? w.tex[n.tex] : w.notes, n.lane, lane(false, n.lane), SY, SY + D * (n.t + n.len - t) * px);
+  for (let i = S.ni; i < c.notes.length; i++) {
+    const n = c.notes[i], y = SY + D * (n.t - t) * px; if ((n.t - t) * px > 800) break;
+    if (!n.hit && !n.miss) note(n, lane(false, n.lane), y);
+  }
+  if (!mids) for (let i = Math.max(0, S.oi - 40); i < c.opp.length; i++) {
+    const n = c.opp[i], y = SY + D * (n.t - t) * px; if ((n.t - t) * px > 800) break;
+    if (n.t > t) note(n, lane(true, n.lane), y);
+    else if (n.len > 0 && n.t + n.len > t && !n.invis) tail(n.tex ? w.tex[n.tex] : w.notes, n.lane, lane(true, n.lane), SY, SY + D * (n.t + n.len - t) * px);
+  }
+  if (w.splash) for (const s of S.splashes) {
+    g.globalAlpha = .6; dcenter(w.splash, frameAt(frames(w.splash, `note splash ${NCOL[s.lane]} ${s.v}`), s.t0, 24, false), lane(false, s.lane), SY, 1); g.globalAlpha = 1;
+  }
+  // saw warning, in the middle of the screen
+  if (S.alert && t - S.alert.t < 700) {
+    const nm = ['single','double','triple','quad'][S.alert.c - 1];
+    const an = w.alertNew ? frames(w.alertNew, 'kb_attack_animation_alert-' + nm) : [];
+    const al = an.length ? an : w.alert ? frames(w.alert, S.alert.c === 2 ? 'A2_Up' : 'A1_Up') : [];
+    const f = al[Math.min(al.length - 1, Math.floor((t - S.alert.t) / 1000 * 24))];
+    if (f) dcenter(an.length ? w.alertNew : w.alert, f, 640, 360, an.length ? 1.5 : 1.1);
+    else { g.fillStyle = '#ff2a3c'; g.beginPath(); g.moveTo(640, 250); g.lineTo(760, 460); g.lineTo(520, 460); g.closePath(); g.fill(); text('!', 640, 380, 140, '#fff'); }
+    if (S.alert.c > 2 && !an.length) text('x' + S.alert.c, 640, 520, 72, '#ff2a3c');
+  }
+  // rating + combo
+  if (S.pop) {
+    const dt = (clock - S.pop.t0) / 1000;
+    if (dt < .6) {
+      g.globalAlpha = dt < .4 ? 1 : 1 - (dt - .4) / .2;
+      const y = 300 - 150 * dt + 275 * dt * dt, img = S.pop.r && w.rate[S.pop.r];
+      if (img) g.drawImage(img, 408 - img.width * .35, y - img.height * .35, img.width * .7, img.height * .7);
+      else if (!S.pop.r) text('MISS', 408, y, 56, '#ff4a5a');
+      else text(S.pop.r.toUpperCase(), 408, y, 56, '#fff');
+      if (S.pop.r) {
+        String(S.pop.combo).padStart(3, '0').split('').forEach((d, i) => { const im = w.nums[+d], x = 340 + 43 * i, yy = y + 90 + 40 * dt * dt;
+          if (im) g.drawImage(im, x - im.width * .25, yy - im.height * .25, im.width * .5, im.height * .5); else text(d, x, yy, 44, '#fff'); });
+      }
+      g.globalAlpha = 1;
+    }
+  }
+  // health bar + icons
+  const hp = Math.max(0, Math.min(1, S.health / 2)), bw = 601, bh = 19, bx = 640 - bw / 2, by = opt.down ? 79 : 641;
+  const rgb = a => `rgb(${a[0]},${a[1]},${a[2]})`;
+  g.fillStyle = '#000'; g.fillRect(bx, by, bw, bh);
+  if (w.hb) g.drawImage(w.hb, bx, by, bw, bh);
+  g.fillStyle = w.dad ? rgb(w.dad.color) : '#ff2a3c'; g.fillRect(bx + 4, by + 4, (bw - 8) * (1 - hp), bh - 8);
+  g.fillStyle = w.bf ? rgb(w.bf.color) : '#31d843'; g.fillRect(bx + 4 + (bw - 8) * (1 - hp), by + 4, (bw - 8) * hp, bh - 8);
+  const split = bx + bw * (1 - hp), isz = 150 * S.iconS;
+  const icon = (ch, x, lose, flip) => {
+    if (!ch || !ch.icon) return; const im = ch.icon, two = im.width >= im.height * 2, fw = two ? im.width / 2 : im.width;
+    g.save(); g.translate(x + (flip ? isz : 0), by - 75 + (150 - isz) / 2); if (flip) g.scale(-1, 1);
+    g.drawImage(im, two && lose ? fw : 0, 0, fw, im.height, 0, 0, isz, isz * im.height / fw); g.restore();
+  };
+  icon(w.bf, split - 26, hp < .2, true); icon(w.dad, split - isz + 26, hp > .8, false);
+  const F = w.font || 'VT323';
+  const sc = S.health < .55 ? '#B20000' : S.health > 1.75 ? '#44E500' : '#A0A0A0';
+  text(`Score: ${S.score} | Misses: ${S.misses} | ${ratingTxt()}`, 640, by + 36, 24, sc, 'center', F);
+  // time bar
+  if (S.len) { const left = Math.max(0, (S.len - Math.max(0, t)) / 1000), p = Math.min(1, Math.max(0, t) / S.len);
+    const ty = opt.down ? 688 : 12;
+    g.fillStyle = '#000'; g.fillRect(440, ty, 400, 20); g.fillStyle = '#004B69'; g.fillRect(444, ty + 4, 392 * p, 12);
+    text(`${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, '0')}`, 640, ty + 10, 33, '#00B4CC', 'center', F); }
+  // 3, 2, 1, go
+  if (S.cd) { const a = 1 - (clock - S.cd.t0) / 400, im = w.count[S.cd.k];
+    if (a > 0) { g.globalAlpha = a; if (im) g.drawImage(im, 0, 0, 1286, 730); else text(S.cd.k.toUpperCase(), 640, 360, 120, '#fff'); g.globalAlpha = 1; } }
+
+  /* --- Now Playing / Difficulty boxes (gamesongintro.lua, gamedifficultyintro.lua) --- */
+  if (t >= 0 && t < 5500) {
+    const circ = p => p < .5 ? (1 - Math.sqrt(1 - (2 * p) ** 2)) / 2 : (Math.sqrt(1 - (-2 * p + 2) ** 2) + 1) / 2;
+    const x = t < 1000 ? -320 + 320 * circ(t / 1000) : t < 3000 ? 0 : -450 * circ(Math.min(1, (t - 3000) / 1500));
+    const ok2 = Math.min(W / 1280, H / 720);
+    g.setTransform(dpr * ok2, 0, 0, dpr * ok2, dpr * (W / 2 - 640 * ok2), dpr * (H / 2 - 360 * ok2));
+    for (const [y, tag, a, b, bc] of [[15, '#00B4CC', 'Now Playing:', c.name, '#808080'], [125, '#004B69', 'Difficulty:', opt.diff.toUpperCase(), '#202020']]) {
+      g.fillStyle = tag; g.fillRect(x, y, 315, 100); g.fillStyle = '#000'; g.fillRect(x, y, 300, 100);
+      text(a, x + 4, y + 32, 35, '#FFFFFF', 'left', F); text(b, x + 4, y + 68, a === 'Difficulty:' ? 35 : 30, bc, 'left', F);
+    }
+  }
+  /* --- corner labels in screen space --- */
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  text(`${c.name} ${opt.diff.toUpperCase()}`, W - 12, 18, 24, '#fff', 'right');
+  text(`Blueballed: ${opt.blue}`, W - 12, 40, 20, '#fff', 'right');
+  if (opt.practice) text('PRACTICE MODE', W - 12, 62, 20, '#fff', 'right');
+  if (opt.bot) text('BOTPLAY', 8, 14, 16, '#00B4CC', 'left', w.font || 'VT323');
+}
+(function loop() {
+  const n = performance.now(), dt = Math.min(100, n - lastFrame); lastFrame = n;
+  if (S && !S.paused) clock += dt;
+  update(dt); draw(); requestAnimationFrame(loop);
+})();
+}
+</script>
+</body></html>
