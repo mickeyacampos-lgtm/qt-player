@@ -217,7 +217,10 @@ async function build(entries, loose = { charts:{} }, hz = {}) {
     const parts = k.split('/'), base = parts.at(-1).slice(0, -5), dir = parts.slice(0, -1).join('/') + '/';
     const ps = j.song && typeof j.song === 'object' ? j.song : j;
     let fmt, id, diffs, name, vr = '';
-    if (Array.isArray(ps.notes)) { fmt = 'psych'; id = parts.at(-2); diffs = [base === id ? 'normal' : base.startsWith(id + '-') ? base.slice(id.length + 1) : base]; name = ps.song || id; }
+    if (Array.isArray(ps.notes) && ps.notes.some(x => x && Array.isArray(x.notes))) {
+      fmt = 'dnb'; id = parts.at(-2); const b = base.replace(/-chart$/, ''); diffs = [b === id ? 'normal' : b.startsWith(id + '-') ? b.slice(id.length + 1) : b]; name = id;
+    }
+    else if (Array.isArray(ps.notes)) { fmt = 'psych'; id = parts.at(-2); diffs = [base === id ? 'normal' : base.startsWith(id + '-') ? base.slice(id.length + 1) : base]; name = ps.song || id; }
     else if (j.notes && typeof j.notes === 'object' && !Array.isArray(j.notes)) { fmt = 'vslice'; id = parts.at(-2); const vm = base.match(/-chart-(.+)$/); vr = vm ? vm[1] : ''; diffs = Object.keys(j.notes); name = id; }
     else if (Array.isArray(j.strumLines)) { fmt = 'codename'; const ci = parts.lastIndexOf('charts'); id = ci > 0 ? parts[ci - 1] : parts.at(-2); diffs = [base]; name = id; }
     else continue;
@@ -228,6 +231,7 @@ async function build(entries, loose = { charts:{} }, hz = {}) {
     for (const d of diffs) { const dk = vr && !/^(erect|nightmare)$/.test(d) ? d + '-' + vr : d; song.charts[dk] = f; (song.dmap ??= {})[dk] = { d, v:vr }; }
     if (fmt === 'psych') song.events ??= files.get(dir + 'events.json');
     if (fmt === 'vslice') { (song.metaV ??= {})[vr] ??= files.get(dir + id + '-metadata' + (vr ? '-' + vr : '') + '.json'); if (!vr) song.meta ??= song.metaV['']; }
+    if (fmt === 'dnb') song.meta ??= files.get(dir + id + '-metadata.json');
     if (fmt === 'codename') song.meta ??= files.get(parts.slice(0, parts.lastIndexOf('charts')).join('/') + '/meta.json');
   }
   // names from metadata, then find each song's music (every .ogg in its folder, picked when the song starts)
@@ -255,7 +259,7 @@ async function build(entries, loose = { charts:{} }, hz = {}) {
   $('song').innerHTML = names.map(n => `<option value="${esc(n)}">${esc(songs[n].name)}${esc(tag(songs[n]))}</option>`).join('');
   const qt = names.find(n => songs[n].id === 'censory-overload'); if (qt) $('song').value = qt;
   fillDiffs();
-  const fm = [...new Set(names.map(n => songs[n].fmt))].map(x => ({ psych:'Psych/Kade', vslice:'V-Slice', codename:'Codename' }[x])).join(', ');
+  const fm = [...new Set(names.map(n => songs[n].fmt))].map(x => ({ psych:'Psych/Kade', vslice:'V-Slice', codename:'Codename', dnb:'Dave & Bambi' }[x])).join(', ');
   status(`Found ${names.length} song${names.length > 1 ? 's' : ''} (${fm} charts) from ${cand.length} files. Mod folders: ${roots.length}.`);
   $('opts').classList.remove('hide');
 }
@@ -273,7 +277,7 @@ async function showInfo() {
     lib.prefer = s.root;
     const c = await loadChartFor(s, d, null);
     const avoid = c.notes.filter(n => n.avoid).length;
-    $('info').textContent = `${Math.round(c.bpmMap[0].bpm)} BPM, speed ${+c.speed.toFixed(2)}, ${c.notes.length} notes${avoid ? ` (${avoid} to avoid)` : ''}${c.fires.length ? `, ${c.fires.length} saws` : ''}. ${c.p1} vs ${c.p2}, stage ${c.stage}. ${({ psych:'Psych/Kade', vslice:'V-Slice', codename:'Codename' })[s.fmt]} chart.`;
+    $('info').textContent = `${Math.round(c.bpmMap[0].bpm)} BPM, speed ${+c.speed.toFixed(2)}, ${c.notes.length} notes${avoid ? ` (${avoid} to avoid)` : ''}${c.fires.length ? `, ${c.fires.length} saws` : ''}. ${c.p1} vs ${c.p2}, stage ${c.stage}. ${({ psych:'Psych/Kade', vslice:'V-Slice', codename:'Codename', dnb:'Dave & Bambi' })[s.fmt]} chart.`;
   } catch (e) { $('info').textContent = 'Could not read that chart: ' + e.message; }
 }
 $('dir').onchange = e => scan(e.target.files);
@@ -525,7 +529,7 @@ function aaDraw(aa, fo, x, y, s, flip, ref) {
 }
 
 /* ---------- characters: Psych .json, V-Slice data/characters .json, Codename .xml ---------- */
-const hexRGB = h => { const m = String(h || '').replace('#', '').match(/^([0-9a-f]{6})/i); return m ? [0, 2, 4].map(i => parseInt(m[1].slice(i, i + 2), 16)) : [161,161,161]; };
+const hexRGB = h => { const m = String(h || '').replace(/^(#|0x)/i, '').match(/^([0-9a-f]{6})/i); return m ? [0, 2, 4].map(i => parseInt(m[1].slice(i, i + 2), 16)) : [161,161,161]; };
 const rangeList = s => !s ? [] : String(s).split(',').flatMap(p => { const r = p.split('..').map(x => parseInt(x)); return r.length === 2 ? Array.from({ length:r[1] - r[0] + 1 }, (_, i) => r[0] + i) : [r[0]]; }).filter(x => !isNaN(x));
 function vsChar(v, name) {
   return { vslice:true, renderType:v.renderType || 'sparrow', image:stripLib(v.assetPath), scale:v.scale || 1, flip_x:!!v.flipX, healthicon:(v.healthIcon && v.healthIcon.id) || name, position:v.offsets || [0,0],
@@ -539,18 +543,78 @@ function cneChar(txt, name) {
     animations:[...d.getElementsByTagName('anim')].map(e => ({ anim:e.getAttribute('name'), name:e.getAttribute('anim'), fps:parseFloat(e.getAttribute('fps')) || 24, loop:e.getAttribute('loop') === 'true',
       offsets:[parseFloat(e.getAttribute('x')) || 0, parseFloat(e.getAttribute('y')) || 0], indices:rangeList(e.getAttribute('indices')) })) };
 }
-async function charJson(name) {
+// tiny HScript reader: expands for (x in [..]) loops, then reads string expressions like 'sing' + anim.toUpperCase()
+function hxSplit(a) {
+  const out = []; let d = 0, q = null, cur = '';
+  for (const ch of a) {
+    if (q) { cur += ch; if (ch === q) q = null; continue; }
+    if (ch === '"' || ch === "'") { q = ch; cur += ch; continue; }
+    if ('([{'.includes(ch)) d++; if (')]}'.includes(ch)) d--;
+    if (ch === ',' && d === 0) { out.push(cur.trim()); cur = ''; } else cur += ch;
+  }
+  if (cur.trim()) out.push(cur.trim()); return out;
+}
+function hxVal(e) {
+  e = String(e || '').trim(); if (!e) return undefined;
+  if (/^-?[\d.]+$/.test(e)) return +e; if (e === 'true' || e === 'false') return e === 'true'; if (e === 'null') return null;
+  if (e.startsWith('[')) return hxSplit(e.slice(1, -1)).map(hxVal);
+  const parts = []; let d = 0, q = null, cur = '';
+  for (const ch of e) { if (q) { cur += ch; if (ch === q) q = null; continue; } if (ch === '"' || ch === "'") q = ch; if ('([{'.includes(ch)) d++; if (')]}'.includes(ch)) d--; if (ch === '+' && !d) { parts.push(cur); cur = ''; } else cur += ch; }
+  parts.push(cur);
+  return parts.map(p => { p = p.trim(); const m = p.match(/^(['"])(.*?)\1((?:\.\w+\(\))*)$/s); if (!m) return /^-?[\d.]+$/.test(p) ? +p : '';
+    let v = m[2]; for (const f of m[3].match(/\w+/g) || []) v = f === 'toUpperCase' ? v.toUpperCase() : f === 'toLowerCase' ? v.toLowerCase() : v; return v; }).join('');
+}
+function hxBlock(src, i) { let d = 0; for (let k = i; k < src.length; k++) { if (src[k] === '{') d++; else if (src[k] === '}' && --d === 0) return k; } return src.length - 1; }
+function hxExpand(src) {
+  src = src.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  for (let n = 0; n < 50; n++) {
+    const m = /for\s*\(\s*(\w+)\s+in\s+\[([^\]]*)\]\s*\)\s*/.exec(src); if (!m) break;
+    const st = m.index + m[0].length; let body, end;
+    if (src[st] === '{') { end = hxBlock(src, st); body = src.slice(st + 1, end); } else { end = src.indexOf(';', st); body = src.slice(st, end + 1); }
+    const vals = hxSplit(m[2]).map(hxVal), re = new RegExp('\\b' + m[1] + '\\b', 'g');
+    src = src.slice(0, m.index) + vals.map(v => body.replace(re, "'" + v + "'")).join('\n') + src.slice(end + 1);
+  }
+  return src;
+}
+function hxCalls(src, fn) {
+  const out = [], re = new RegExp(fn.replace(/\./g, '\\.') + '\\s*\\(', 'g'); let m;
+  while ((m = re.exec(src))) { let d = 1, k = re.lastIndex; for (; k < src.length && d; k++) { if (src[k] === '(') d++; else if (src[k] === ')') d--; } out.push({ at:m.index, args:hxSplit(src.slice(re.lastIndex, k - 1)) }); }
+  return out;
+}
+// Dave & Bambi characters: data/characters/<name>.json + scripts/characters/<name>.hxc + data/offsets/<name>.txt
+async function dnbChar(j, src, name, isPlayer) {
+  src = hxExpand(src);
+  const atl = hxCalls(src, 'getSparrowAtlas')[0], image = atl ? hxVal(atl.args[0]) : 'characters/' + name;
+  const anims = [];
+  for (const c of hxCalls(src, 'animation.addByPrefix')) { const a = c.args.map(hxVal); anims.push({ anim:a[0], name:a[1], fps:a[2] || 24, loop:!!a[3], indices:[] }); }
+  for (const c of hxCalls(src, 'animation.addByIndices')) { const a = c.args.map(hxVal); anims.push({ anim:a[0], name:a[1], indices:Array.isArray(a[2]) ? a[2] : [], fps:a[4] || 24, loop:!!a[5] }); }
+  for (const c of hxCalls(src, 'addCharAtlas')) {
+    const p = hxVal(c.args[0]);
+    for (const m of (c.args[1] || '').matchAll(/name\s*:\s*(['"])(.*?)\1\s*,\s*prefix\s*:\s*(['"])(.*?)\3/g)) anims.push({ anim:m[2], name:m[4], fps:24, loop:false, indices:[], image:p });
+  }
+  const off = {}, of = find('data/offsets/' + ((isPlayer ? j.offsetFilePlayer : j.offsetFileOpponent) || name) + '.txt') || find('data/offsets/' + name + '.txt');
+  if (of) for (const l of (await of.text()).split(/\r?\n/)) { const p = l.trim().split(/\s+/); if (p.length >= 3) off[p[0]] = [+p[1] || 0, +p[2] || 0]; }
+  for (const a of anims) a.offsets = off[a.anim] || [0, 0];
+  const go = j.globalOffset || [];
+  return { dnb:true, native:!!j.nativelyPlayable, image, scale:j.scale || 1, flip_x:!!j.flipX, healthicon:j.icon || name, position:[+go[0] || 0, +go[1] || 0],
+    camera_position:j.cameraOffsets || [0, 0], sing_duration:j.singDuration || 4, healthbar_colors:hexRGB(j.color), no_antialiasing:j.antialiasing === false, animations:anims };
+}
+async function charJson(name, isPlayer) {
   let f;
   try {
     if (f = find('characters/' + name + '.json')) return await readJson(f);
-    if (f = find('data/characters/' + name + '.json')) return vsChar(await readJson(f), name);
+    if (f = find('data/characters/' + name + '.json')) {
+      const v = await readJson(f), hx = find('scripts/characters/' + name + '.hxc');
+      if (!v.animations && hx) return await dnbChar(v, await hx.text(), name, isPlayer);
+      return vsChar(v, name);
+    }
     if (f = find('data/characters/' + name + '.xml')) return cneChar(await f.text(), name);
   } catch (e) {}
   return null;
 }
 async function loadChar(name, isPlayer) {
   if (!name) return null;
-  const j = await charJson(name); if (!j || !j.image) return null;
+  const j = await charJson(name, isPlayer); if (!j || !j.image) return null;
   // a sheet can be Sparrow (.png + .xml) or an Adobe Animate folder (Animation.json + spritemap1)
   const sheet = async p => { p = stripLib(p); return /animate/i.test(j.renderType || '') ? (await loadAnimate(p) || await loadAtlas(p)) : (await loadAtlas(p) || await loadAnimate(p)); };
   const at = await sheet(j.image); if (!at) return null;
@@ -561,7 +625,7 @@ async function loadChar(name, isPlayer) {
     if (fr.length) anims[a.anim] = { fr, fps:a.fps || (aat.animate ? aat.fps : 24), loop:!!a.loop, off:a.offsets || [0,0], at:aat };
   }
   if (!Object.keys(anims).length) return null;
-  if (!j.vslice && isPlayer && !name.startsWith('bf')) for (const m of ['', 'miss']) { const L = anims['singLEFT' + m]; anims['singLEFT' + m] = anims['singRIGHT' + m]; anims['singRIGHT' + m] = L; }
+  if (j.dnb ? isPlayer && !j.native : !j.vslice && isPlayer && !name.startsWith('bf')) for (const m of ['', 'miss']) { const L = anims['singLEFT' + m]; anims['singLEFT' + m] = anims['singRIGHT' + m]; anims['singRIGHT' + m] = L; }
   const s = j.scale || 1, base = anims.idle || anims.danceLeft || anims.danceRight || Object.values(anims)[0];
   const ref = base && base.at.animate ? aaBounds(base.at, base.fr[0]) : null;
   const icon = await loadImg('icons/icon-' + j.healthicon + '.png') || await loadImg('icons/' + j.healthicon + '.png') || await loadImg('icons/' + j.healthicon + '/icon.png');
@@ -669,6 +733,21 @@ function parse(j, ej, types) {
            name:s.song || '', p1:s.player1 || 'bf', p2:s.player2 || 'dad', gf:s.gfVersion || s.player3 || 'gf', stage:s.stage || 'stage',
            skin, splash:s.splashSkin || 'noteSplashes', needsVoices:s.needsVoices !== false });
 }
+// Dave & Bambi 1.0: sections of { time, direction, length, type } + <song>-metadata.json (player, opponent, stage, timeChanges)
+function dnbToPsych(j, m) {
+  const tc = (m.timeChanges || []).map(x => ({ t:+(x.time ?? x.t ?? 0), bpm:+x.bpm })).filter(x => x.bpm > 0).sort((a, b) => a.t - b.t);
+  const bpm0 = tc.length ? tc[0].bpm : +j.bpm || 120; let bpm = bpm0, t = 0, k = 1;
+  const notes = (j.notes || []).map(sec => {
+    const o = { mustHitSection:!!sec.mustHitSection, gfSection:!!sec.gfSection, altAnim:!!sec.altAnim,
+      sectionNotes:(sec.notes || sec.sectionNotes || []).map(n => Array.isArray(n) ? n : [+n.time, +n.direction, +n.length || 0, n.type || '']) };
+    let ch = false; while (k < tc.length && tc[k].t <= t + 1) { bpm = tc[k++].bpm; ch = true; }
+    if (ch) { o.changeBPM = true; o.bpm = bpm; }
+    t += (+sec.sectionBeats || (+sec.lengthInSteps || 16) / 4) * 60000 / bpm;
+    return o;
+  });
+  return { song:{ notes, bpm:bpm0, speed:+j.speed || 2, player1:m.player || 'bf', player2:m.opponent || 'dad', gfVersion:m.gf || 'gf', stage:m.stage || 'stage',
+    song:m.songName || '', needsVoices:true, events:j.events || [] } };
+}
 // V-Slice (the base game since 0.3): <song>-chart.json + <song>-metadata.json
 function parseVSlice(j, m, d, types) {
   const pd = m.playData || {}, ch = pd.characters || {};
@@ -723,6 +802,7 @@ async function loadChartFor(s, d, types) {
   const j = await readJson(s.charts[d]), dm = (s.dmap && s.dmap[d]) || { d, v:'' };
   if (s.fmt === 'vslice') { const c = parseVSlice(j, (s.metaVJ && s.metaVJ[dm.v]) || s.metaJ || {}, dm.d, types); c.vari = dm.v; return c; }
   if (s.fmt === 'codename') return parseCodename(j, s.metaJ || {}, types);
+  if (s.fmt === 'dnb') { const c = parse(dnbToPsych(j, s.metaJ || {}), null, types); c.fmt = 'dnb'; return c; }
   const ej = s.events ? await readJson(s.events).catch(() => null) : null;
   return parse(j, ej, types);
 }
@@ -736,7 +816,7 @@ function secAt(t) { let r = chart.secs[0] || { must:false }; for (const s of cha
 const spr = o => ({ sf:[1,1], sx:1, sy:1, alpha:1, angle:0, vis:true, x:0, y:0, ...o });
 async function loadStage(c) {
   const sid = c.stage, sprites = [];
-  let st = {}, kind = 'psych';
+  let st = {}, kind = 'psych', dv = null;
   const cz = { gf:100, dad:200, bf:300 };
   const sj = find('stages/' + sid + '.json'), vj = find('data/stages/' + sid + '.json'), cx = find('data/stages/' + sid + '.xml');
   if (sj) {
@@ -753,6 +833,36 @@ async function loadStage(c) {
           anim:ty === 'animatedSprite' && !!an, prefix:an && an.name, fps:(an && an.fps) || 24 }));
       }
     });
+  }
+  else if (vj && (dv = await readJson(vj).catch(() => null)) && !dv.characters && (dv.player || dv.opponent)) {
+    kind = 'dnb';
+    const P = k => dv[k] || {}, pos = (k, d) => P(k).position || d, co = (k, a) => { const c = P(k).cameraOffsets || [0, 0]; return [(+c[0] || 0) + a, +c[1] || 0]; };
+    st = { defaultZoom:dv.zoom || 1, boyfriend:pos('player', [770, 450]), opponent:pos('opponent', [100, 100]), girlfriend:pos('gf', [400, 130]),
+           camera_boyfriend:co('player', 100), camera_opponent:co('opponent', -150), camera_girlfriend:co('gf', 0), hide_girlfriend:!dv.gf };
+    for (const [k, n] of [['bf','player'], ['dad','opponent'], ['gf','gf']]) if (P(n).zIndex !== undefined) cz[k] = P(n).zIndex;
+    const hx = find('scripts/stages/' + sid + '.hxc');
+    if (hx) try {
+      const src = hxExpand(await hx.text()), byName = {};
+      for (const m of src.matchAll(/var\s+(\w+)\s*(?::\s*[\w<>]+)?\s*=\s*new\s+BGSprite\s*\(/g)) {
+        const c = hxCalls(src.slice(m.index), 'new BGSprite')[0]; if (!c) continue;
+        const a = c.args, img = (a[3] || '').match(/Paths\.image\(\s*(['"])(.*?)\1/);
+        if (!img) continue;
+        const an = a[4] && a[4] !== 'null' ? (a[4].match(/(['"])(.*?)\1/) || [])[2] : null;
+        byName[m[1]] = spr({ img:img[2], x:hxVal(a[1]) || 0, y:hxVal(a[2]) || 0, sf:[a[5] !== undefined ? hxVal(a[5]) : 1, a[6] !== undefined ? hxVal(a[6]) : (a[5] !== undefined ? hxVal(a[5]) : 1)], anim:!!an, prefix:an || '', fps:24 });
+      }
+      for (const m of src.matchAll(/var\s+(\w+)\s*(?::\s*[\w<>]+)?\s*=\s*new\s+FlxSprite\s*\(([^,)]*),([^)]*)\)\s*\.loadGraphic\(\s*Paths\.image\(\s*(['"])(.*?)\4/g))
+        byName[m[1]] = spr({ img:m[5], x:hxVal(m[2]) || 0, y:hxVal(m[3]) || 0 });
+      for (const [nm, sp] of Object.entries(byName)) {
+        const v = re => (src.match(new RegExp('\\b' + nm + re)) || [])[1];
+        const z = v('\\.zIndex\\s*=\\s*(-?[\\d.]+)'); if (z !== undefined) sp.z = +z;
+        const al = v('\\.alpha\\s*=\\s*([\\d.]+)'); if (al !== undefined) sp.alpha = +al;
+        if (v('\\.visible\\s*=\\s*(false)')) sp.vis = false;
+        const sc = src.match(new RegExp('\\b' + nm + '\\.scale\\.set\\(\\s*([\\d.]+)\\s*(?:,\\s*([\\d.]+))?')); if (sc) { sp.sx = +sc[1]; sp.sy = sc[2] ? +sc[2] : +sc[1]; }
+        const sf = src.match(new RegExp('\\b' + nm + '\\.scrollFactor\\.set\\(\\s*([\\d.]+)\\s*(?:,\\s*([\\d.]+))?')); if (sf) sp.sf = [+sf[1], sf[2] ? +sf[2] : +sf[1]];
+        const gs = src.match(new RegExp('\\b' + nm + '\\.setGraphicSize\\(\\s*(?:Std\\.int\\()?\\s*' + nm + '\\.width\\s*\\*\\s*([\\d.]+)')); if (gs) { sp.sx = sp.sy = +gs[1]; }
+        sprites.push(sp);
+      }
+    } catch (e) {}
   }
   else if (vj) {
     kind = 'vslice';
@@ -892,7 +1002,10 @@ async function loadWorld(c) {
   w.ns = c.noteStyle ? await loadNoteStyle(c.noteStyle) : null;
   // one list, back to front: stage sprites and the three characters by their layer
   w.order = [...stage.sprites.map((sp, i) => ({ z:sp.z, i, sp })), ...['gf','dad','bf'].map((k, i) => ({ z:stage.cz[k], i:1e5 + i, ch:k }))].sort((a, b) => a.z - b.z || a.i - b.i);
-  w.notes = await loadAtlas(sk) || await loadAtlas('NOTE_assets') || await loadAtlas('notes/NOTE_assets');
+  w.notes = null; let nd = '';
+  for (const p of [sk, 'NOTE_assets', 'notes/NOTE_assets', 'noteSkins/NOTE_assets', 'ui/notes/normal/NOTE_assets', 'ui/notes/NOTE_assets']) { w.notes = await loadAtlas(p); if (w.notes) { nd = p.includes('/') ? p.slice(0, p.lastIndexOf('/') + 1) : ''; break; } }
+  w.strumAt = w.notes && strumPre(w.notes, 0, 'static') ? w.notes : await loadAtlas(nd + 'NOTE_strumline') || await loadAtlas(nd + 'NOTE_strums') || w.notes;
+  w.holdAt = w.notes && holdPre(w.notes, 0).piece ? w.notes : await loadAtlas(nd + 'NOTE_hold_assets') || await loadAtlas(nd + 'NOTE_holds') || w.notes;
   w.tex = {};
   for (const n of [...c.notes, ...c.opp]) if (n.tex && !(n.tex in w.tex)) w.tex[n.tex] = await loadAtlas(n.tex) || await loadAtlas('HURT' + sk) || await loadAtlas('HURTNOTE_assets');
   w.splash = await loadAtlas(c.splash) || await loadAtlas('noteSplashes');
@@ -1281,6 +1394,25 @@ function shakeOff(t, which) {
   const [d, i] = s[which]; if (t - s.t > d || !i) return [0, 0];
   return [(Math.random() * 2 - 1) * i * 1280, (Math.random() * 2 - 1) * i * 720];
 }
+// note / strum / hold animations in any sheet, by colour or direction name ("purple0", "arrowLEFT", "left confirm", "pruple end hold"...)
+const pres = at => at.memo.__p || (at.memo.__p = [...new Set(at.fr.map(f => f.n.replace(/\d+$/, '')))]);
+const dirRe = ln => new RegExp('(' + NCOL[ln] + (ln === 0 ? '|pruple' : '') + '|' + DIRS[ln] + '(?![a-z]))', 'i');
+function strumPre(at, ln, st) {
+  const k = 'st' + ln + st; if (k in at.memo) return at.memo[k];
+  const l = pres(at).filter(n => dirRe(ln).test(n) && !/hold|end|piece|splash|impact|cover/i.test(n));
+  const pick = st === 'static' ? l.find(n => /^arrow/i.test(n)) || l.find(n => /static/i.test(n)) : l.find(n => new RegExp(st, 'i').test(n) && !/hold/i.test(n));
+  return at.memo[k] = pick || null;
+}
+function notePre(at, ln) {
+  const k = 'nt' + ln; if (k in at.memo) return at.memo[k];
+  const l = pres(at).filter(n => dirRe(ln).test(n) && !/hold|end|piece|arrow|static|press|confirm|splash|impact|cover/i.test(n));
+  return at.memo[k] = l.find(n => n.toLowerCase().startsWith(NCOL[ln])) || l[0] || null;
+}
+function holdPre(at, ln) {
+  const k = 'hd' + ln; if (at.memo[k]) return at.memo[k];
+  const l = pres(at).filter(n => dirRe(ln).test(n) && /hold|end|piece/i.test(n) && !/cover/i.test(n));
+  return at.memo[k] = { piece:l.find(n => !/end/i.test(n)) || null, end:l.find(n => /end/i.test(n)) || null };
+}
 // the splash animations for one lane in any Psych / Kade splash sheet ("note splash purple 1", "note impact 1 purple"...)
 function splashPre(at, ln) {
   const k = 'sp' + ln; if (at.memo[k]) return at.memo[k];
@@ -1360,9 +1492,10 @@ function draw() {
     if (ns && ns.strum) { const P = ns.strum.pre[i], at = ns.strum.at, pre = P[st.a] || P.static;
       const f = (pre && frameAt(frames(at, pre), st.t0, 24, false)) || (P.static && frames(at, P.static)[0]);
       if (f) { dcenter(at, f, x, SY, ns.strum.s); return; } }
-    if (!w.notes) { const lit = st.a === 'confirm'; arrow(x, SY, 100, i, lit ? COL[i] : '#3a3340', lit ? '#fff' : '#8f8697'); return; }
-    const pre = st.a === 'static' ? 'arrow' + DIRS[i] : DIRS[i].toLowerCase() + ' ' + st.a;
-    dcenter(w.notes, frameAt(frames(w.notes, pre), st.t0, 24, false) || frames(w.notes, 'arrow' + DIRS[i])[0], x, SY, NS);
+    const sa = w.strumAt, p0 = sa && strumPre(sa, i, 'static'), pa = sa && st.a !== 'static' ? strumPre(sa, i, st.a) : null;
+    const f = sa && ((pa && frameAt(frames(sa, pa), st.t0, 24, false)) || (p0 && frames(sa, p0)[0]));
+    if (!f) { const lit = st.a === 'confirm'; arrow(x, SY, 100, i, lit ? COL[i] : '#3a3340', lit ? '#fff' : '#8f8697'); return; }
+    dcenter(sa, f, x, SY, NS);
   };
   const tail = (atl, i, x, y0, y1) => {
     if (Math.abs(y1 - y0) < 1) return;
@@ -1377,7 +1510,8 @@ function draw() {
       g.globalAlpha = 1; return;
     }
     if (!atl) { g.globalAlpha = .6; g.fillStyle = COL[i]; g.fillRect(x - 16, top, 32, bot - top); g.globalAlpha = 1; return; }
-    const pc = frames(atl, NCOL[i] + ' hold piece')[0], en = frames(atl, i === 0 ? 'pruple end hold' : NCOL[i] + ' hold end')[0], q = atl.q || 1;
+    const hp = holdPre(atl, i), pc = hp.piece && frames(atl, hp.piece)[0], en = hp.end && frames(atl, hp.end)[0], q = atl.q || 1;
+    if (!pc && !en) { g.globalAlpha = .6; g.fillStyle = COL[i]; g.fillRect(x - 16, top, 32, bot - top); g.globalAlpha = 1; return; }
     g.globalAlpha = .6;
     const eh = Math.min(en ? en.h * NS : 0, bot - top);
     if (!up) {
@@ -1391,13 +1525,13 @@ function draw() {
     }
     g.globalAlpha = 1;
   };
-  const tatl = n => n.tex ? (w.tex[n.tex] || w.notes) : ns && ns.hold ? 'ns' : w.notes;
+  const tatl = n => n.tex ? (w.tex[n.tex] || w.holdAt) : ns && ns.hold ? 'ns' : w.holdAt;
   const note = (n, x, y) => {
     if (n.invis) return;
     const atl = n.tex ? w.tex[n.tex] : w.notes;
     if (n.len > 0) tail(tatl(n), n.lane, x, y, y + D * n.len * px);
     if (!n.tex && ns && ns.note) { const f = frames(ns.note.at, ns.note.pre[n.lane])[0]; if (f) { dcenter(ns.note.at, f, x, y, ns.note.s); return; } }
-    const f = atl && (frames(atl, NCOL[n.lane] + '0')[0] || frames(atl, NCOL[n.lane])[0]);
+    const np = atl && notePre(atl, n.lane), f = np && frames(atl, np)[0];
     if (f) { dcenter(atl, f, x, y, NS); return; }
     if (n.avoid) { arrow(x, y, 100, n.lane, '#111', '#ff2a3c'); g.strokeStyle = '#ff2a3c'; g.lineWidth = 8; g.beginPath(); g.moveTo(x-18,y-18); g.lineTo(x+18,y+18); g.moveTo(x+18,y-18); g.lineTo(x-18,y+18); g.stroke(); }
     else arrow(x, y, 100, n.lane, COL[n.lane], '#000');
