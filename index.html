@@ -40,6 +40,14 @@ button:focus-visible,select:focus-visible,.pick:focus-within{outline:3px solid #
 .chk input{appearance:none;width:22px;height:22px;border:2px solid #8f8697;background:#0d080e;margin:0;flex:none;cursor:pointer}
 .chk input:checked{background:var(--red);border-color:var(--red);box-shadow:inset 0 0 0 4px #0d080e}
 .chk input:focus-visible{outline:3px solid #fff;outline-offset:2px}
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));column-gap:12px}
+input[type=number]{font:inherit;font-size:22px;color:var(--ink);background:#0d080e;border:2px solid #5a4656;padding:6px 10px;min-height:44px;width:100%}
+input[type=range]{appearance:none;width:100%;height:44px;background:transparent;margin:0;cursor:pointer}
+input[type=range]::-webkit-slider-runnable-track{height:8px;background:#5a4656}
+input[type=range]::-webkit-slider-thumb{appearance:none;width:18px;height:26px;background:var(--red);border:0;margin-top:-9px}
+input[type=range]::-moz-range-track{height:8px;background:#5a4656}
+input[type=range]::-moz-range-thumb{width:18px;height:26px;background:var(--red);border:0;border-radius:0}
+input:focus-visible{outline:3px solid #fff;outline-offset:2px}
 </style></head><body>
 <canvas id="cv"></canvas>
 
@@ -60,14 +68,33 @@ button:focus-visible,select:focus-visible,.pick:focus-within{outline:3px solid #
     <label for="keys">Keys</label>
     <select id="keys"><option value="WASD">W A S D</option><option value="ASKL">A S K L</option><option value="DFJK">D F J K</option><option value="CVNM">C V N M</option></select>
     <fieldset class="optbox"><legend>Options</legend>
-      <label class="chk"><input type="checkbox" id="o_lq"> Low quality (potato sprites, for Chromebooks)</label>
+      <div class="cols">
+      <label class="chk"><input type="checkbox" id="o_lq"> Low quality (for Chromebooks)</label>
       <label class="chk"><input type="checkbox" id="o_down"> Downscroll</label>
       <label class="chk"><input type="checkbox" id="o_mid"> Middlescroll</label>
+      <label class="chk"><input type="checkbox" id="o_opp" checked> Show opponent notes</label>
+      <label class="chk"><input type="checkbox" id="o_ghost" checked> Ghost tapping</label>
       <label class="chk"><input type="checkbox" id="o_splash" checked> Note splashes</label>
+      <label class="chk"><input type="checkbox" id="o_hits"> Hit sounds</label>
+      <label class="chk"><input type="checkbox" id="o_ms"> Show hit timing (ms)</label>
+      <label class="chk"><input type="checkbox" id="o_under"> Lane underlay</label>
+      <label class="chk"><input type="checkbox" id="o_hud"> Hide HUD</label>
       <label class="chk"><input type="checkbox" id="o_flash" checked> Flashing lights</label>
       <label class="chk"><input type="checkbox" id="o_zoom" checked> Camera zooms</label>
+      <label class="chk"><input type="checkbox" id="o_insta"> Instakill on miss</label>
+      </div>
+      <div class="row">
+        <div><label for="o_speed">Scroll speed</label><select id="o_speed"><option value="0">Chart</option><option value="1">1</option><option value="1.5">1.5</option><option value="2">2</option><option value="2.5">2.5</option><option value="3">3</option><option value="3.5">3.5</option><option value="4">4</option><option value="5">5</option></select></div>
+        <div><label for="o_rate">Song speed</label><select id="o_rate"><option value="0.5">0.5x</option><option value="0.75">0.75x</option><option value="1" selected>1x</option><option value="1.25">1.25x</option><option value="1.5">1.5x</option><option value="2">2x</option></select></div>
+        <div><label for="o_off">Note offset (ms)</label><input id="o_off" type="number" min="-500" max="500" step="5" value="0"></div>
+      </div>
+      <div class="row">
+        <div><label for="o_vm">Music volume</label><input id="o_vm" type="range" min="0" max="100" value="100"></div>
+        <div><label for="o_vv">Voices volume</label><input id="o_vv" type="range" min="0" max="100" value="100"></div>
+        <div><label for="o_vs">Sounds volume</label><input id="o_vs" type="range" min="0" max="100" value="100"></div>
+      </div>
     </fieldset>
-    <p class="small" style="margin-top:8px">Arrow keys always work. Space dodges saws. Enter or Esc opens the menu.</p>
+    <p class="small" style="margin-top:8px">Arrow keys always work. Space dodges saws. Enter or Esc opens the menu. In a song: [ and ] together = Botplay, - and = together = Practice, R = restart, H = hide HUD. On a touchscreen tap the 4 lanes; tap the top right corner to pause.</p>
     <button id="start" class="go">Start</button>
   </div>
 </div></div>
@@ -109,15 +136,19 @@ const TYPES = {
 let lib = { files:new Map(), songs:{}, hz:{}, hzb:null };
 let cache = new Map();
 let ctx = null, bufs = {}, chart = null, S = null, W8 = null, dpr = 1, clock = 0, lastFrame = performance.now();
-let opt = { bot:false, practice:false, blue:0, keys:'WASD', diff:'' };
+let opt = { bot:false, practice:false, blue:0, keys:'WASD', diff:'', ghost:true, opp:true, rate:1, off:0, speed:0, vm:100, vv:100, vs:100 };
+const keysDown = new Set(), touchL = new Map();
 let menu = null;
 const used = new Map();
 
 try { const k = localStorage.getItem('qtkeys'); if (k && KEYSETS[k]) $('keys').value = k; } catch (e) {}
-const OPTS = { lq:'o_lq', down:'o_down', mid:'o_mid', splash:'o_splash', flash:'o_flash', zoom:'o_zoom' };
-try { const o = JSON.parse(localStorage.getItem('qtopts') || '{}'); for (const [k, id] of Object.entries(OPTS)) if (k in o) $(id).checked = !!o[k]; } catch (e) {}
+const OPTS = { lq:'o_lq', down:'o_down', mid:'o_mid', splash:'o_splash', flash:'o_flash', zoom:'o_zoom', ghost:'o_ghost', opp:'o_opp', hud:'o_hud', hits:'o_hits',
+               ms:'o_ms', insta:'o_insta', under:'o_under', speed:'o_speed', rate:'o_rate', off:'o_off', vm:'o_vm', vv:'o_vv', vs:'o_vs' };
+const isChk = id => $(id).type === 'checkbox', getO = id => isChk(id) ? $(id).checked : (parseFloat($(id).value) || 0);
+try { const o = JSON.parse(localStorage.getItem('qtopts') || '{}'); for (const [k, id] of Object.entries(OPTS)) if (k in o) { if (isChk(id)) $(id).checked = !!o[k]; else $(id).value = o[k]; } } catch (e) {}
 function readOpts() {
-  const o = {}; for (const [k, id] of Object.entries(OPTS)) o[k] = $(id).checked;
+  const o = {}; for (const [k, id] of Object.entries(OPTS)) o[k] = getO(id);
+  o.rate = Math.max(0.25, o.rate || 1); o.off = Math.max(-500, Math.min(500, o.off));
   if (o.lq !== opt.lq) cache = new Map();
   Object.assign(opt, o); try { localStorage.setItem('qtopts', JSON.stringify(o)); } catch (e) {}
   fit();
@@ -129,7 +160,7 @@ const readJson = async f => JSON.parse((await f.text()).replace(/^﻿/, ''));
 
 /* ---------- finding the game's files (any FNF mod: Psych, V-Slice, Codename, Kade) ---------- */
 const TOP = ['images','data','songs','characters','stages','weeks','sounds','music','fonts','custom_notetypes','custom_events','scripts','notetypes'];
-const EXTRA_SND = ['intro3','intro2','intro1','introgo','missnote1','missnote2','missnote3'];
+const EXTRA_SND = ['intro3','intro2','intro1','introgo','missnote1','missnote2','missnote3','hitsound'];
 async function scan(list) {
   const entries = [], loose = { charts:{} }, hz0 = {};
   for (const f of list) {
@@ -185,36 +216,36 @@ async function build(entries, loose = { charts:{} }, hz = {}) {
     if (!j || typeof j !== 'object') continue;
     const parts = k.split('/'), base = parts.at(-1).slice(0, -5), dir = parts.slice(0, -1).join('/') + '/';
     const ps = j.song && typeof j.song === 'object' ? j.song : j;
-    let fmt, id, diffs, name;
+    let fmt, id, diffs, name, vr = '';
     if (Array.isArray(ps.notes)) { fmt = 'psych'; id = parts.at(-2); diffs = [base === id ? 'normal' : base.startsWith(id + '-') ? base.slice(id.length + 1) : base]; name = ps.song || id; }
-    else if (j.notes && typeof j.notes === 'object' && !Array.isArray(j.notes)) { fmt = 'vslice'; id = parts.at(-2); diffs = Object.keys(j.notes); name = id; }
+    else if (j.notes && typeof j.notes === 'object' && !Array.isArray(j.notes)) { fmt = 'vslice'; id = parts.at(-2); const vm = base.match(/-chart-(.+)$/); vr = vm ? vm[1] : ''; diffs = Object.keys(j.notes); name = id; }
     else if (Array.isArray(j.strumLines)) { fmt = 'codename'; const ci = parts.lastIndexOf('charts'); id = ci > 0 ? parts[ci - 1] : parts.at(-2); diffs = [base]; name = id; }
     else continue;
     const root = roots.filter(r => k.startsWith(r)).sort((a, b) => b.length - a.length)[0] ?? '';
     const key = root + '|' + fmt + '|' + id;
     const song = songs[key] ??= { key, id, root, fmt, name, charts:{}, dir };
     if (fmt === 'psych' && ps.song) song.name = ps.song;
-    for (const d of diffs) song.charts[d] = f;
+    for (const d of diffs) { const dk = vr && !/^(erect|nightmare)$/.test(d) ? d + '-' + vr : d; song.charts[dk] = f; (song.dmap ??= {})[dk] = { d, v:vr }; }
     if (fmt === 'psych') song.events ??= files.get(dir + 'events.json');
-    if (fmt === 'vslice') song.meta ??= files.get(dir + id + '-metadata.json');
+    if (fmt === 'vslice') { (song.metaV ??= {})[vr] ??= files.get(dir + id + '-metadata' + (vr ? '-' + vr : '') + '.json'); if (!vr) song.meta ??= song.metaV['']; }
     if (fmt === 'codename') song.meta ??= files.get(parts.slice(0, parts.lastIndexOf('charts')).join('/') + '/meta.json');
   }
-  // names from metadata, then find each song's music
+  // names from metadata, then find each song's music (every .ogg in its folder, picked when the song starts)
+  const audDir = {};
+  for (const [k, f] of files) { const m = k.match(/^(.*\/)([^\/]+)\.(ogg|mp3)$/); if (m) (audDir[m[1]] ??= {})[m[2]] ??= f; }
   for (const s of Object.values(songs)) {
     if (s.meta) try { const m = await readJson(s.meta); s.metaJ = m; s.name = m.songName || m.displayName || m.name || s.name; } catch (e) {}
+    if (s.metaV) { s.metaVJ = {}; for (const [v, f] of Object.entries(s.metaV)) if (f) try { s.metaVJ[v] = await readJson(f); } catch (e) {} if (!s.metaJ && s.metaVJ['']) s.metaJ = s.metaVJ['']; }
     const ids = [...new Set([s.id, slug(s.name)])];
     outer: for (const r of [s.root, ...roots]) for (const id of ids) for (const sub of [`songs/${id}/`, `songs/${id}/song/`]) {
-      const pre = r + sub, inst = files.get(pre + 'inst.ogg') || files.get(pre + 'inst.mp3');
+      const aud = audDir[r + sub]; if (!aud) continue;
+      const inst = aud.inst || Object.entries(aud).find(([n]) => n.startsWith('inst'))?.[1];
       if (!inst) continue;
-      s.inst = inst;
-      const vs = [...files].filter(([k]) => k.startsWith(pre) && /^voices[^\/]*\.(ogg|mp3)$/.test(k.slice(pre.length)) && !/classic/.test(k));
-      const main = vs.find(([k]) => /\/voices\.(ogg|mp3)$/.test(k));
-      const pick = main ? [main] : vs;
-      s.voiceFiles = pick.map(x => x[1]); s.voiceNames = pick.map(x => x[0].slice(pre.length).replace(/\.(ogg|mp3)$/, ''));
+      s.inst = inst; s.aud = aud;
       break outer;
     }
   }
-  if (loose.inst && Object.keys(loose.charts).length) songs['your files'] = { key:'your files', id:'your files', root:'', fmt:'psych', name:'Your files', charts:loose.charts, events:loose.events, inst:loose.inst, voiceFiles:loose.voices ? [loose.voices] : [], voiceNames:['voices'], dir:'' };
+  if (loose.inst && Object.keys(loose.charts).length) songs['your files'] = { key:'your files', id:'your files', root:'', fmt:'psych', name:'Your files', charts:loose.charts, events:loose.events, inst:loose.inst, aud:{ inst:loose.inst, ...(loose.voices ? { voices:loose.voices } : {}) }, dir:'' };
   for (const k of Object.keys(songs)) if (!songs[k].inst) delete songs[k];
   Object.assign(lib, { songs, weekOf });
   const wk = s => order.indexOf(s.id) + 1 || order.indexOf(slug(s.name)) + 1 || 999;
@@ -383,13 +414,123 @@ function dframe(at, f, x, y, s, flip, sy) {
 }
 const dcenter = (at, f, cx, cy, s, flip) => f && dframe(at, f, cx - f.fw * s / 2, cy - f.fh * s / 2, s, flip);
 
+/* ---------- Adobe Animate texture atlases (Animation.json + spritemap1.json/png), used by the base game's characters ---------- */
+// compact and long-form Animation.json both get turned into { layers:[{ fr:[{ i, du, n, el:[{ sym|bmp, ff, lp, mx, al }] }] }], len }
+function aaMx(o) {
+  if (!o) return [1,0,0,1,0,0];
+  if (Array.isArray(o)) return o.length >= 16 ? [o[0], o[1], o[4], o[5], o[12], o[13]] : o.slice(0, 6);
+  return [o.m00 ?? 1, o.m01 ?? 0, o.m10 ?? 0, o.m11 ?? 1, o.m30 ?? 0, o.m31 ?? 0];
+}
+function aaTL(tl) {
+  const L = (tl && (tl.L || tl.LAYERS)) || [];
+  let len = 0;
+  const layers = L.map(l => ({ fr:(l.FR || l.Frames || []).map(f => {
+    const i = +(f.I ?? f.index ?? 0), du = +(f.DU ?? f.duration ?? 1); len = Math.max(len, i + du);
+    const el = (f.E || f.elements || []).map(e => {
+      const si = e.SI || e.SYMBOL_Instance, as = e.ASI || e.ATLAS_SPRITE_instance;
+      if (si) {
+        const c = si.C || si.color, al = c && /^(CA|AD|Alpha|Advanced)$/i.test(c.M || c.mode || '') ? +(c.AM ?? c.alphaMultiplier ?? 1) : 1;
+        const lp = String(si.LP || si.loop || 'LP').toUpperCase();
+        return { sym:si.SN || si.SYMBOL_name, ff:+(si.FF ?? si.firstFrame ?? 0), lp:lp.startsWith('P') ? 'PO' : lp.startsWith('S') ? 'SF' : 'LP', mx:aaMx(si.MX || si.M3D || si.Matrix3D), al };
+      }
+      if (as) return { bmp:as.N || as.name, mx:aaMx(as.MX || as.M3D || as.Matrix3D), al:1 };
+      return null;
+    }).filter(Boolean);
+    return { i, du, n:f.N || f.name || '', el };
+  }) }));
+  return { layers, len:Math.max(1, len) };
+}
+const mxMul = (p, c) => [p[0] * c[0] + p[2] * c[1], p[1] * c[0] + p[3] * c[1], p[0] * c[2] + p[2] * c[3], p[1] * c[2] + p[3] * c[3], p[0] * c[4] + p[2] * c[5] + p[4], p[1] * c[4] + p[3] * c[5] + p[5]];
+function loadAnimate(p) {
+  const k = 'aa:' + p;
+  if (cache.has(k)) return cache.get(k);
+  const pr = (async () => {
+    const af = imgFile(p + '/Animation.json'); if (!af) return null;
+    const aj = await readJson(af), spr = {};
+    for (let n = 1; n < 20; n++) {
+      const mj = imgFile(p + '/spritemap' + n + '.json'), mp = imgFile(p + '/spritemap' + n + '.png');
+      if (!mj || !mp) { if (n > 1) break; continue; }
+      const m = await readJson(mj), pb = await blobOf(mp);
+      const hd = new DataView(await pb.slice(0, 24).arrayBuffer()), W0 = hd.getUint32(16), H0 = hd.getUint32(20);
+      const q = opt.lq && Math.max(W0, H0) > 2048 ? 0.5 : 1;
+      const bmp = await (q < 1 ? createImageBitmap(pb, { resizeWidth:Math.round(W0 * q), resizeHeight:Math.round(H0 * q), resizeQuality:'low' }) : createImageBitmap(pb));
+      for (const s of (m.ATLAS && m.ATLAS.SPRITES) || []) { const o = s.SPRITE || s; spr[o.name] = { bmp, q, x:+o.x, y:+o.y, w:+o.w, h:+o.h, rot:!!o.rotated }; }
+    }
+    if (!Object.keys(spr).length) return null;
+    const an = aj.AN || aj.ANIMATION || {}, sd = aj.SD || aj.SYMBOL_DICTIONARY || {}, md = aj.MD || aj.metadata || {};
+    const syms = {};
+    for (const s of sd.S || sd.Symbols || []) syms[s.SN || s.SYMBOL_name] = aaTL(s.TL || s.TIMELINE);
+    const main = aaTL(an.TL || an.TIMELINE), labels = {};
+    for (const l of main.layers) for (const f of l.fr) if (f.n && !(f.n in labels)) labels[f.n] = { i:f.i, du:f.du };
+    // some exports keep the whole character inside one symbol and use that symbol's frame labels
+    if (!Object.keys(labels).length && main.layers.length) {
+      const top = main.layers.flatMap(l => l.fr.flatMap(f => f.el)).find(e => e.sym);
+      if (top && syms[top.sym]) for (const l of syms[top.sym].layers) for (const f of l.fr) if (f.n && !(f.n in labels)) labels[f.n] = { i:f.i, du:f.du, sym:top.sym };
+    }
+    return { animate:true, spr, syms, main, labels, fps:+(md.FRT || md.framerate || 24), memo:{} };
+  })().catch(() => null);
+  cache.set(k, pr); return pr;
+}
+// walk a timeline at a frame, calling fn(sprite, matrix, alpha) for each bitmap, back layer first
+function aaWalk(aa, tl, f, m, al, fn, depth = 0) {
+  if (!tl || depth > 32) return;
+  for (let li = tl.layers.length - 1; li >= 0; li--) {
+    const fr = tl.layers[li].fr; let kf = null;
+    for (const x of fr) if (x.i <= f && f < x.i + x.du) { kf = x; break; }
+    if (!kf) continue;
+    for (const e of kf.el) {
+      const mm = mxMul(m, e.mx), a2 = al * e.al;
+      if (e.bmp) { const s = aa.spr[e.bmp]; if (s) fn(s, mm, a2); continue; }
+      const st = aa.syms[e.sym]; if (!st) continue;
+      let cf = e.ff + (e.lp === 'SF' ? 0 : f - kf.i);
+      cf = e.lp === 'PO' ? Math.min(cf, st.len - 1) : ((cf % st.len) + st.len) % st.len;
+      aaWalk(aa, st, cf, mm, a2, fn, depth + 1);
+    }
+  }
+}
+function aaBounds(aa, fo) {
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  aaWalk(aa, fo.tl, fo.f, [1,0,0,1,0,0], 1, (s, m) => {
+    const w = s.rot ? s.h : s.w, h = s.rot ? s.w : s.h;
+    for (const [px, py] of [[0,0],[w,0],[0,h],[w,h]]) { const X = m[0] * px + m[2] * py + m[4], Y = m[1] * px + m[3] * py + m[5]; x0 = Math.min(x0, X); y0 = Math.min(y0, Y); x1 = Math.max(x1, X); y1 = Math.max(y1, Y); }
+  });
+  return x0 > x1 ? { x:0, y:0, w:1, h:1 } : { x:x0, y:y0, w:x1 - x0, h:y1 - y0 };
+}
+// the frames of one animation: a frame label on the main timeline (or a symbol's name), then frameIndices inside it
+function aaFrames(aa, prefix, idx) {
+  if (!aa) return [];
+  const key = prefix + '|' + (idx || ''); if (aa.memo[key]) return aa.memo[key];
+  let tl = aa.main, start = 0, n = 0;
+  const lb = aa.labels[prefix] || Object.entries(aa.labels).find(([k]) => k.toLowerCase() === String(prefix).toLowerCase())?.[1];
+  if (lb) { if (lb.sym) tl = aa.syms[lb.sym]; start = lb.i; n = lb.du; }
+  else if (aa.syms[prefix]) { tl = aa.syms[prefix]; n = tl.len; }
+  else return aa.memo[key] = [];
+  let l = Array.from({ length:n }, (_, i) => ({ aa:true, tl, f:start + i }));
+  if (idx && idx.length) l = idx.map(i => l[i]).filter(Boolean);
+  return aa.memo[key] = l;
+}
+// draw one Animate frame so that the box `ref` (from the idle pose) lands at x, y like a Sparrow frame would
+function aaDraw(aa, fo, x, y, s, flip, ref) {
+  if (!aa || !fo) return;
+  const base = g.getTransform(), B = [base.a, base.b, base.c, base.d, base.e, base.f];
+  const T = flip ? [-s, 0, 0, s, x + ref.w * s + ref.x * s, y - ref.y * s] : [s, 0, 0, s, x - ref.x * s, y - ref.y * s];
+  const P = mxMul(B, T), a0 = g.globalAlpha;
+  aaWalk(aa, fo.tl, fo.f, [1,0,0,1,0,0], 1, (sp, m, al) => {
+    const M = mxMul(P, m); g.globalAlpha = a0 * al;
+    if (sp.rot) { const R = mxMul(M, [0, -1, 1, 0, 0, sp.w]); g.setTransform(R[0], R[1], R[2], R[3], R[4], R[5]); }
+    else g.setTransform(M[0], M[1], M[2], M[3], M[4], M[5]);
+    g.drawImage(sp.bmp, sp.x * sp.q, sp.y * sp.q, sp.w * sp.q, sp.h * sp.q, 0, 0, sp.w, sp.h);
+  });
+  g.setTransform(base); g.globalAlpha = a0;
+}
+
 /* ---------- characters: Psych .json, V-Slice data/characters .json, Codename .xml ---------- */
 const hexRGB = h => { const m = String(h || '').replace('#', '').match(/^([0-9a-f]{6})/i); return m ? [0, 2, 4].map(i => parseInt(m[1].slice(i, i + 2), 16)) : [161,161,161]; };
 const rangeList = s => !s ? [] : String(s).split(',').flatMap(p => { const r = p.split('..').map(x => parseInt(x)); return r.length === 2 ? Array.from({ length:r[1] - r[0] + 1 }, (_, i) => r[0] + i) : [r[0]]; }).filter(x => !isNaN(x));
 function vsChar(v, name) {
-  return { image:stripLib(v.assetPath), scale:v.scale || 1, flip_x:!!v.flipX, healthicon:(v.healthIcon && v.healthIcon.id) || name, position:v.offsets || [0,0],
-    camera_position:v.cameraOffsets || [0,0], sing_duration:v.singTime || 8, healthbar_colors:[161,161,161], no_antialiasing:!!v.isPixel,
-    animations:(v.animations || []).map(a => ({ anim:a.name, name:a.prefix, fps:a.frameRate || 24, loop:!!a.looped, offsets:a.offsets || [0,0], indices:a.frameIndices || [] })) };
+  return { vslice:true, renderType:v.renderType || 'sparrow', image:stripLib(v.assetPath), scale:v.scale || 1, flip_x:!!v.flipX, healthicon:(v.healthIcon && v.healthIcon.id) || name, position:v.offsets || [0,0],
+    camera_position:v.cameraOffsets || [0,0], sing_duration:v.singTime || 8, healthbar_colors:null, no_antialiasing:!!v.isPixel,
+    animations:(v.animations || []).map(a => ({ anim:a.name, name:a.prefix, image:a.assetPath ? stripLib(a.assetPath) : null, fps:a.frameRate, loop:!!a.looped, offsets:a.offsets || [0,0], indices:a.frameIndices || [] })) };
 }
 function cneChar(txt, name) {
   const d = new DOMParser().parseFromString(txt, 'application/xml').documentElement, a = k => d.getAttribute(k), n = k => parseFloat(a(k)) || 0;
@@ -410,16 +551,23 @@ async function charJson(name) {
 async function loadChar(name, isPlayer) {
   if (!name) return null;
   const j = await charJson(name); if (!j || !j.image) return null;
-  const at = await loadAtlas(stripLib(j.image)); if (!at) return null;
+  // a sheet can be Sparrow (.png + .xml) or an Adobe Animate folder (Animation.json + spritemap1)
+  const sheet = async p => { p = stripLib(p); return /animate/i.test(j.renderType || '') ? (await loadAnimate(p) || await loadAtlas(p)) : (await loadAtlas(p) || await loadAnimate(p)); };
+  const at = await sheet(j.image); if (!at) return null;
   const anims = {};
-  for (const a of j.animations || []) { const fr = frames(at, a.name, a.indices); if (fr.length) anims[a.anim] = { fr, fps:a.fps || 24, loop:!!a.loop, off:a.offsets || [0,0] }; }
+  for (const a of j.animations || []) {
+    const aat = a.image && a.image !== stripLib(j.image) ? await sheet(a.image) : at; if (!aat) continue;
+    const fr = aat.animate ? aaFrames(aat, a.name, a.indices) : frames(aat, a.name, a.indices);
+    if (fr.length) anims[a.anim] = { fr, fps:a.fps || (aat.animate ? aat.fps : 24), loop:!!a.loop, off:a.offsets || [0,0], at:aat };
+  }
   if (!Object.keys(anims).length) return null;
-  if (isPlayer && !name.startsWith('bf')) for (const m of ['', 'miss']) { const L = anims['singLEFT' + m]; anims['singLEFT' + m] = anims['singRIGHT' + m]; anims['singRIGHT' + m] = L; }
-  const s = j.scale || 1, base = anims.idle || anims.danceLeft || Object.values(anims)[0];
+  if (!j.vslice && isPlayer && !name.startsWith('bf')) for (const m of ['', 'miss']) { const L = anims['singLEFT' + m]; anims['singLEFT' + m] = anims['singRIGHT' + m]; anims['singRIGHT' + m] = L; }
+  const s = j.scale || 1, base = anims.idle || anims.danceLeft || anims.danceRight || Object.values(anims)[0];
+  const ref = base && base.at.animate ? aaBounds(base.at, base.fr[0]) : null;
   const icon = await loadImg('icons/icon-' + j.healthicon + '.png') || await loadImg('icons/' + j.healthicon + '.png') || await loadImg('icons/' + j.healthicon + '/icon.png');
-  return { name, at, anims, s, flip:isPlayer ? !j.flip_x : !!j.flip_x, x:0, y:0, cur:'', t0:0, until:-1e9, side:false, sfx:'',
-           lr:!!anims.danceLeft, pos:j.position || [0,0], cam:j.camera_position || [0,0], icon, color:j.healthbar_colors || [150,150,150],
-           sing:j.sing_duration || 4, smooth:!j.no_antialiasing, w:base ? base.fr[0].fw * s : 0, h:base ? base.fr[0].fh * s : 0 };
+  return { name, at, anims, s, ref, flip:j.vslice ? !!j.flip_x : isPlayer ? !j.flip_x : !!j.flip_x, x:0, y:0, cur:'', t0:0, until:-1e9, side:false, sfx:'',
+           lr:!!anims.danceLeft, pos:j.position || [0,0], cam:j.camera_position || [0,0], icon, color:j.healthbar_colors || (isPlayer ? [102,255,51] : [255,0,0]),
+           sing:j.sing_duration || 4, smooth:!j.no_antialiasing, w:ref ? ref.w * s : base ? base.fr[0].fw * s : 0, h:ref ? ref.h * s : base ? base.fr[0].fh * s : 0 };
 }
 function play(c, a) { if (c && c.anims[a]) { c.cur = a; c.t0 = clock; return true; } return false; }
 function dance(c) {
@@ -437,7 +585,9 @@ function animDone(c) { const a = c.anims[c.cur]; return !a || (clock - c.t0) / 1
 function drawChar(c) {
   if (!c) return; const a = c.anims[c.cur]; if (!a) return;
   g.imageSmoothingEnabled = c.smooth;
-  dframe(c.at, frameAt(a.fr, c.t0, a.fps, a.loop), c.x - a.off[0], c.y - a.off[1], c.s, c.flip);
+  const f = frameAt(a.fr, c.t0, a.fps, a.loop);
+  if (a.at.animate) aaDraw(a.at, f, c.x - a.off[0], c.y - a.off[1], c.s, c.flip, c.ref || { x:0, y:0, w:0, h:0 });
+  else dframe(a.at, f, c.x - a.off[0], c.y - a.off[1], c.s, c.flip);
   g.imageSmoothingEnabled = true;
 }
 const mid = c => [c.x + c.w / 2, c.y + c.h / 2];
@@ -543,7 +693,8 @@ function parseVSlice(j, m, d, types) {
   const sp = j.scrollSpeed || {};
   return finish({ notes, opp, alerts:[], fires:[], fx, secs, bpmMap, speed:+(typeof sp === 'number' ? sp : sp[d] ?? sp.default) || 1, dodge:true, fmt:'vslice',
            name:m.songName || '', p1:ch.player || 'bf', p2:ch.opponent || 'dad', gf:ch.girlfriend || 'gf', stage:pd.stage || 'mainStage',
-           skin, noteStyle:pd.noteStyle || 'funkin', splash:'noteSplashes', needsVoices:true });
+           skin, noteStyle:pd.noteStyle || 'funkin', splash:'noteSplashes', needsVoices:true,
+           pVoc:ch.playerVocals, oVoc:ch.opponentVocals, instVar:ch.instrumental });
 }
 // Codename Engine: songs/<song>/charts/<diff>.json + songs/<song>/meta.json
 function parseCodename(j, m, types) {
@@ -569,8 +720,8 @@ function parseCodename(j, m, types) {
            skin, splash:'noteSplashes', needsVoices:m.needsVoices !== false });
 }
 async function loadChartFor(s, d, types) {
-  const j = await readJson(s.charts[d]);
-  if (s.fmt === 'vslice') return parseVSlice(j, s.metaJ || {}, d, types);
+  const j = await readJson(s.charts[d]), dm = (s.dmap && s.dmap[d]) || { d, v:'' };
+  if (s.fmt === 'vslice') { const c = parseVSlice(j, (s.metaVJ && s.metaVJ[dm.v]) || s.metaJ || {}, dm.d, types); c.vari = dm.v; return c; }
   if (s.fmt === 'codename') return parseCodename(j, s.metaJ || {}, types);
   const ej = s.events ? await readJson(s.events).catch(() => null) : null;
   return parse(j, ej, types);
@@ -586,19 +737,35 @@ const spr = o => ({ sf:[1,1], sx:1, sy:1, alpha:1, angle:0, vis:true, x:0, y:0, 
 async function loadStage(c) {
   const sid = c.stage, sprites = [];
   let st = {}, kind = 'psych';
+  const cz = { gf:100, dad:200, bf:300 };
   const sj = find('stages/' + sid + '.json'), vj = find('data/stages/' + sid + '.json'), cx = find('data/stages/' + sid + '.xml');
-  if (sj) { try { st = await readJson(sj); } catch (e) {} }
+  if (sj) {
+    try { st = await readJson(sj); } catch (e) {}
+    // Psych 1.0 stages list their sprites and the character groups in draw order
+    if (Array.isArray(st.objects)) st.objects.forEach((o, i) => {
+      const z = i * 10, ty = o.type, grp = { gfGroup:'gf', dadGroup:'dad', boyfriendGroup:'bf' }[ty];
+      if (grp) { cz[grp] = z; return; }
+      const sc = Array.isArray(o.scale) ? o.scale : [o.scale ?? 1, o.scale ?? 1], sf = Array.isArray(o.scroll) ? o.scroll : [1, 1];
+      if (ty === 'square') sprites.push(spr({ color:/^#/.test(o.color || '') ? o.color : '#' + (o.color || 'FFFFFF'), x:o.x || 0, y:o.y || 0, cw:sc[0], ch:sc[1], sf, alpha:o.alpha ?? 1, z }));
+      else if (ty === 'sprite' || ty === 'animatedSprite') {
+        const an = (o.animations || []).find(a => a.anim === o.firstAnimation) || (o.animations || [])[0];
+        sprites.push(spr({ img:o.image, x:o.x || 0, y:o.y || 0, sx:sc[0], sy:sc[1], sf, alpha:o.alpha ?? 1, angle:o.angle || 0, vis:o.visible !== false, z,
+          anim:ty === 'animatedSprite' && !!an, prefix:an && an.name, fps:(an && an.fps) || 24 }));
+      }
+    });
+  }
   else if (vj) {
     kind = 'vslice';
     try {
       const v = await readJson(vj), chs = v.characters || {};
       st = { defaultZoom:v.cameraZoom || 1, boyfriend:(chs.bf || {}).position || [989, 885], opponent:(chs.dad || {}).position || [335, 885], girlfriend:(chs.gf || {}).position || [751, 787],
              camera_boyfriend:(chs.bf || {}).cameraOffsets, camera_opponent:(chs.dad || {}).cameraOffsets, camera_girlfriend:(chs.gf || {}).cameraOffsets, hide_girlfriend:!chs.gf };
-      const cz = Math.min(...['bf','dad','gf'].map(k => (chs[k] || {}).zIndex ?? 200));
+      for (const k of ['bf','dad','gf']) if (chs[k] && chs[k].zIndex !== undefined) cz[k] = chs[k].zIndex;
+      const cmin = Math.min(cz.bf, cz.dad, cz.gf);
       for (const p of v.props || []) {
         const sc = Array.isArray(p.scale) ? p.scale : [p.scale ?? 1, p.scale ?? 1], an = p.animations || [];
         const a0 = an.find(a => a.name === p.startingAnimation) || an[0];
-        const o = { x:(p.position || [0,0])[0], y:(p.position || [0,0])[1], sf:p.scroll || [1,1], sx:sc[0], sy:sc[1], alpha:p.alpha ?? 1, front:(p.zIndex ?? 0) > cz, z:p.zIndex ?? 0 };
+        const o = { x:(p.position || [0,0])[0], y:(p.position || [0,0])[1], sf:p.scroll || [1,1], sx:sc[0], sy:sc[1], alpha:p.alpha ?? 1, front:(p.zIndex ?? 0) > cmin, z:p.zIndex ?? 0 };
         if (String(p.assetPath).startsWith('#')) sprites.push(spr({ ...o, color:p.assetPath, sx:1, sy:1, cw:sc[0], ch:sc[1] }));
         else sprites.push(spr({ ...o, img:stripLib(p.assetPath), anim:!!a0, prefix:a0 && a0.prefix, fps:(a0 && a0.frameRate) || 24 }));
       }
@@ -608,14 +775,14 @@ async function loadStage(c) {
     kind = 'codename';
     try {
       const d = new DOMParser().parseFromString(await cx.text(), 'application/xml').documentElement, folder = d.getAttribute('folder') || '';
-      st.defaultZoom = parseFloat(d.getAttribute('zoom')) || 1; let front = false;
+      st.defaultZoom = parseFloat(d.getAttribute('zoom')) || 1; let front = false, zi = 0;
       for (const e of d.children) {
-        const n = k => parseFloat(e.getAttribute(k)), tg = e.tagName.toLowerCase();
-        if (['boyfriend','bf','dad','opponent','girlfriend','gf'].includes(tg)) { front = true; const k = slot(tg); st[{ bf:'boyfriend', dad:'opponent', gf:'girlfriend' }[k]] = [n('x') || 0, n('y') || 0]; continue; }
+        const n = k => parseFloat(e.getAttribute(k)), tg = e.tagName.toLowerCase(), z = (zi++) * 10;
+        if (['boyfriend','bf','dad','opponent','girlfriend','gf'].includes(tg)) { front = true; const k = slot(tg); cz[k] = z; st[{ bf:'boyfriend', dad:'opponent', gf:'girlfriend' }[k]] = [n('x') || 0, n('y') || 0]; continue; }
         if (tg !== 'sprite') continue;
         const sc = n('scale') || 1, sr = n('scroll'), an = e.getElementsByTagName('anim')[0];
         sprites.push(spr({ img:folder + e.getAttribute('sprite'), x:n('x') || 0, y:n('y') || 0, sx:sc, sy:sc, sf:[isNaN(sr) ? n('scrollx') || 1 : sr, isNaN(sr) ? n('scrolly') || 1 : sr],
-          alpha:isNaN(n('alpha')) ? 1 : n('alpha'), front, anim:!!an, prefix:an && an.getAttribute('anim'), fps:an ? parseFloat(an.getAttribute('fps')) || 24 : 24 }));
+          alpha:isNaN(n('alpha')) ? 1 : n('alpha'), front, z, anim:!!an, prefix:an && an.getAttribute('anim'), fps:an ? parseFloat(an.getAttribute('fps')) || 24 : 24 }));
       }
     } catch (e) {}
   }
@@ -667,8 +834,9 @@ async function loadStage(c) {
     }
   }
   const ok = sprites.filter(s => s.vis && s.alpha > 0 && (s.color || s.bmp || (s.fr && s.fr.length)));
+  ok.forEach((s, i) => { if (s.z === undefined) s.z = (s.front ? 1000 : -1000) + i; });
   const hasBg = { 0:true, 1:ok.some(s => s.bg === 1), 2:ok.some(s => s.bg === 2), frontErr:ok.some(s => s.bg === 12) };
-  return { st, kind, sprites:ok, hasBg, tv:ok.find(s => s.tv) };
+  return { st, kind, sprites:ok, hasBg, tv:ok.find(s => s.tv), cz };
 }
 function drawSprite(sp, W, H, Z, cx, cy) {
   if (opt.lq && sp.tv) return;
@@ -687,6 +855,20 @@ function drawSprite(sp, W, H, Z, cx, cy) {
   g.globalAlpha = 1;
 }
 
+// V-Slice note styles (data/notestyles/*.json): notes, strums, hold trails and splashes, with a fallback style
+async function loadNoteStyle(id, depth = 0) {
+  const f = find('data/notestyles/' + id + '.json'); if (!f || depth > 4) return null;
+  let j; try { j = await readJson(f); } catch (e) { return null; }
+  const base = j.fallback ? await loadNoteStyle(j.fallback, depth + 1) : null, A = j.assets || {}, out = { ...(base || {}) };
+  const L = ['left','down','up','right'], D = x => (x && x.data) || {};
+  if (A.note && A.note.assetPath) { const at = await loadAtlas(stripLib(A.note.assetPath)); if (at) out.note = { at, s:A.note.scale ?? 1, pre:L.map(d => (D(A.note)[d] || {}).prefix || 'note' + d[0].toUpperCase() + d.slice(1)) }; }
+  if (A.noteStrumline && A.noteStrumline.assetPath) { const at = await loadAtlas(stripLib(A.noteStrumline.assetPath)), d0 = D(A.noteStrumline);
+    if (at) out.strum = { at, s:A.noteStrumline.scale ?? 1, pre:L.map(d => ({ static:(d0[d + 'Static'] || {}).prefix, press:(d0[d + 'Press'] || {}).prefix, confirm:(d0[d + 'Confirm'] || {}).prefix })) }; }
+  if (A.holdNote && A.holdNote.assetPath) { const img = await loadImg(stripLib(A.holdNote.assetPath) + '.png'); if (img) out.hold = { img, s:A.holdNote.scale ?? 1 }; }
+  if (A.noteSplash && A.noteSplash.assetPath) { const at = await loadAtlas(stripLib(A.noteSplash.assetPath)), d0 = D(A.noteSplash);
+    if (at && d0.enabled !== false) out.splash = { at, alpha:A.noteSplash.alpha ?? .8, pre:L.map(d => (d0[d + 'Splashes'] || []).map(x => x.prefix).filter(Boolean)) }; }
+  return out.note || out.strum ? out : null;
+}
 async function loadWorld(c) {
   const stage = await loadStage(c), st = stage.st;
   const w = { zoom:st.defaultZoom || 0.9, stage, st, pos:{ bf:st.boyfriend || [770,100], dad:st.opponent || [100,100], gf:st.girlfriend || [400,130] }, pool:{} };
@@ -707,7 +889,9 @@ async function loadWorld(c) {
   [w.bf, w.dad, w.gf] = await Promise.all([make(c.p1, 'bf'), make(c.p2, 'dad'), st.hide_girlfriend ? null : make(c.gf, 'gf')]);
   for (const k of ['bf','dad','gf']) for (const n of c.chars[k]) await make(n, k);
   let sk = c.skin || 'NOTE_assets';
-  if (c.noteStyle && c.noteStyle !== 'funkin') { const f = find('data/notestyles/' + c.noteStyle + '.json'); if (f) try { const ns = await readJson(f); const ap = ns.assets && ns.assets.note && ns.assets.note.assetPath; if (ap) sk = stripLib(ap); } catch (e) {} }
+  w.ns = c.noteStyle ? await loadNoteStyle(c.noteStyle) : null;
+  // one list, back to front: stage sprites and the three characters by their layer
+  w.order = [...stage.sprites.map((sp, i) => ({ z:sp.z, i, sp })), ...['gf','dad','bf'].map((k, i) => ({ z:stage.cz[k], i:1e5 + i, ch:k }))].sort((a, b) => a.z - b.z || a.i - b.i);
   w.notes = await loadAtlas(sk) || await loadAtlas('NOTE_assets') || await loadAtlas('notes/NOTE_assets');
   w.tex = {};
   for (const n of [...c.notes, ...c.opp]) if (n.tex && !(n.tex in w.tex)) w.tex[n.tex] = await loadAtlas(n.tex) || await loadAtlas('HURT' + sk) || await loadAtlas('HURTNOTE_assets');
@@ -742,13 +926,13 @@ $('start').onclick = async () => {
     if (Object.keys(types).length) ch = await loadChartFor(s, d, types);
     chart = ch;
     const dec = async f => f ? await ctx.decodeAudioData(await f.arrayBuffer()) : null;
-    let vf = s.voiceFiles || [];
-    if ((s.voiceNames || []).length > 1) { const want = [chart.p1, chart.p2].map(x => 'voices-' + String(x).toLowerCase()); const pick = vf.filter((_, i) => want.includes(s.voiceNames[i])); if (pick.length) vf = pick; }
-    const bk = key + '|' + vf.length;
-    if (bufs.key !== bk) bufs = { key:bk, inst:await dec(s.inst), voices:(await Promise.all(vf.map(f => dec(f).catch(() => null)))).filter(Boolean) };
+    const au = pickAudio(s, chart), vf = [...au.pl, ...au.op];
+    const bk = [au.inst, ...vf].map(f => lib.keyOf.get(f) || (f && f.name)).join('|');
+    const decAll = l => Promise.all(l.map(f => dec(f).catch(() => null))).then(x => x.filter(Boolean));
+    if (bufs.key !== bk) bufs = { key:bk, inst:await dec(au.inst), pl:await decAll(au.pl), op:await decAll(au.op) };
     if (!lib.hzb) { lib.hzb = {}; for (const n of [...SOUNDS, ...EXTRA_SND, 'cd3', 'cd2', 'cd1', 'cdgo']) if (lib.hz[n]) { try { lib.hzb[n] = await dec(lib.hz[n]); } catch (e) {} } }
     status('Loading the sprites…');
-    for (const f of [s.charts[d], s.meta, s.events, s.inst, ...vf, ...Object.values(lib.hz)]) { const k = f && lib.keyOf.get(f); if (k) used.set(k, f); }
+    for (const f of [s.charts[d], s.meta, ...Object.values(s.metaV || {}), s.events, au.inst, ...vf, ...Object.values(lib.hz)]) { const k = f && lib.keyOf.get(f); if (k) used.set(k, f); }
     readOpts();
     W8 = await loadWorld(chart);
     W8.font = await loadFont();
@@ -763,10 +947,32 @@ $('start').onclick = async () => {
 };
 
 /* ---------- audio ---------- */
+// Inst / Voices for this chart: V-Slice variations (Inst-erect, Voices-bf-erect), Psych 1.0 (Voices-Player / Voices-Opponent) or one Voices file
+function pickAudio(s, c) {
+  const a = s.aud || {}, sx = c.vari ? '-' + c.vari : '', lo = x => String(x || '').toLowerCase();
+  const iv = c.instVar !== undefined && c.instVar !== null ? (c.instVar ? 'inst-' + lo(c.instVar) : 'inst') : 'inst' + sx;
+  const inst = a[iv] || a['inst' + sx] || a.inst || s.inst;
+  const one = names => { for (const n of names) if (a[n + sx]) return a[n + sx]; if (sx) for (const n of names) if (a[n]) return a[n]; return null; };
+  const pn = [...(c.pVoc || [c.p1]).map(x => 'voices-' + lo(x)), 'voices-player'], on = [...(c.oVoc || [c.p2]).map(x => 'voices-' + lo(x)), 'voices-opponent'];
+  let pl = [one(pn)].filter(Boolean), op = [one(on)].filter(Boolean);
+  if (!pl.length && !op.length) {
+    const main = a['voices' + sx] || a.voices;
+    if (main) pl = [main];
+    else pl = Object.entries(a).filter(([n]) => /^voices/.test(n) && !/classic/.test(n) && (!sx || n.endsWith(sx))).map(x => x[1]);
+  }
+  return { inst, pl, op };
+}
+const atT = t => S.start + (t + opt.off) / 1000 / S.rate;
+function hitsound() {
+  if (lib.hzb && lib.hzb.hitsound) { sfx('hitsound', 0, 0.6); return; }
+  const o = ctx.createOscillator(), gn = ctx.createGain(), t0 = ctx.currentTime;
+  o.type = 'square'; o.frequency.value = 1400; gn.gain.setValueAtTime(0.12 * opt.vs / 100, t0); gn.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.05);
+  o.connect(gn).connect(ctx.destination); o.start(t0); o.stop(t0 + 0.06);
+}
 function sfx(name, at, vol = 0.8) {
   const b = lib.hzb && lib.hzb[name]; if (!b || !S) return;
   const src = ctx.createBufferSource(), gn = ctx.createGain();
-  src.buffer = b; gn.gain.value = vol; src.connect(gn).connect(ctx.destination);
+  src.buffer = b; gn.gain.value = vol * opt.vs / 100; src.connect(gn).connect(ctx.destination);
   src.start(Math.max(ctx.currentTime, at || 0));
   const list = S.sfx; list.push(src);
   src.onended = () => { const i = list.indexOf(src); if (i >= 0) list.splice(i, 1); };
@@ -785,18 +991,23 @@ function begin() {
         gainMul:1, lossMul:1, drain:0, spd:{ from:1, to:1, t0:0, dur:0 },
         held:[0,0,0,0], ps:[st(),st(),st(),st()], os:[st(),st(),st(),st()], holds:[], splashes:[],
         dead:false, ended:false, paused:false, src:[], sfx:[], zoomAdd:0, hudAdd:0, iconS:1 };
-  S.start = ctx.currentTime + 5 * crochetAt(0) / 1000; S.tick = -1; S.cd = null;
-  S.gV = ctx.createGain(); S.gV.connect(ctx.destination);
-  for (const [b, out] of [[bufs.inst, ctx.destination], ...(chart.needsVoices ? (bufs.voices || []).map(v => [v, S.gV]) : [])]) {
+  S.rate = opt.rate || 1;
+  S.start = ctx.currentTime + 5 * crochetAt(0) / 1000 / S.rate; S.tick = -1; S.cd = null;
+  // the player's voices go quiet on a miss; the opponent's never do
+  const gM = ctx.createGain(), gVol = ctx.createGain(); gM.gain.value = opt.vm / 100; gVol.gain.value = opt.vv / 100;
+  gM.connect(ctx.destination); gVol.connect(ctx.destination);
+  S.gV = ctx.createGain(); S.gV.connect(gVol);
+  const vo = chart.needsVoices ? [...(bufs.pl || []).map(v => [v, S.gV]), ...(bufs.op || []).map(v => [v, gVol])] : [];
+  for (const [b, out] of [[bufs.inst, gM], ...vo]) {
     if (!b) continue;
-    const a = ctx.createBufferSource(); a.buffer = b; a.connect(out); a.start(S.start); S.src.push(a);
+    const a = ctx.createBufferSource(); a.buffer = b; a.playbackRate.value = S.rate; a.connect(out); a.start(S.start); S.src.push(a);
   }
   S.len = bufs.inst ? bufs.inst.duration * 1000 : 0;
   S.cam = null;
   closeMenu();
   if (ctx.state === 'suspended') ctx.resume();
 }
-const now = () => (ctx.currentTime - S.start) * 1000;
+const now = () => (ctx.currentTime - S.start) * 1000 * S.rate - opt.off;
 const songT = () => S.dead ? S.deadAt : now();
 const laneOf = code => { let i = ARROWS.indexOf(code); if (i < 0) i = KEYSETS[opt.keys].indexOf(code); return i; };
 function camTarget(t) {
@@ -814,11 +1025,12 @@ function camBase(sec, cs) {
   const o = cs.camera_opponent || [0,0]; return [mx + 150 + c.cam[0] + o[0], my - 100 + c.cam[1] + o[1]];
 }
 function zoomMul(t) { const z = S && S.zoomTw; if (!z) return 1; const p = z.dur > 0 ? Math.min(1, Math.max(0, (t - z.t0) / z.dur)) : 1; return z.from + (z.to - z.from) * p; }
-function speedNow(t) { const s = S.spd; const p = s.dur > 0 ? Math.min(1, Math.max(0, (t - s.t0) / s.dur)) : 1; return chart.speed * (s.from + (s.to - s.from) * p); }
+function speedNow(t) { if (opt.speed > 0) return opt.speed; const s = S.spd; const p = s.dur > 0 ? Math.min(1, Math.max(0, (t - s.t0) / s.dur)) : 1; return chart.speed * (s.from + (s.to - s.from) * p); }
 
 function popRating(r) { S.pop = { r, t0:clock, combo:S.combo }; }
 function hurt(amount, lane, n) {
   S.health -= amount * S.lossMul; S.misses++; S.combo = 0; S.gV.gain.value = 0;
+  if (opt.insta && !opt.practice && !opt.bot) S.health = -1;
   if (lane >= 0) sing(W8.bf, lane, true); popRating(null);
   if (n && n.sound) sfx(n.sound, 0, 0.5);
 }
@@ -830,7 +1042,8 @@ function hitNote(n, t) {
   const [r, sc, a] = d <= 45 ? ['sick',350,1] : d <= 90 ? ['good',200,.67] : d <= 135 ? ['bad',100,.34] : ['shit',50,0];
   S.score += sc; S.hits++; S.acc += a; S.combo++;
   S.health = Math.min(2, S.health + (n.gain ?? 0.023) * S.gainMul); S.gV.gain.value = 1;
-  popRating(r);
+  popRating(r); S.pop.ms = n.t - t;
+  if (opt.hits) hitsound();
   if (n.dodge) { sfx(n.sound, 0, 0.5); if (W8.bf && play(W8.bf, 'dodge')) W8.bf.until = clock + crochetAt(t); }
   else if (n.gf) sing(W8.gf, n.lane); else if (!n.noAnim) sing(W8.bf, n.lane, false, n.alt);
   if (r === 'sick' && opt.splash && !opt.lq) S.splashes.push({ lane:n.lane, t0:clock, v:1 + (Math.random() < .5 ? 1 : 0) });
@@ -844,7 +1057,8 @@ function press(lane) {
     const d = Math.abs(n.t - t); if (d > 166) continue;
     const sc = d + (n.avoid ? 1000 : 0); if (sc < bs) { bs = sc; best = n; }
   }
-  if (best) hitNote(best, t); else S.ps[lane] = { a:'press', t0:clock, hold:0 };
+  if (best) hitNote(best, t);
+  else { S.ps[lane] = { a:'press', t0:clock, hold:0 }; if (!opt.ghost && t > 0) miss(lane); }
 }
 function doDodge(t) { S.dodgeT = t; if (W8.bf && play(W8.bf, 'dodge')) W8.bf.until = clock + crochetAt(t); }
 function dodge() {
@@ -908,8 +1122,8 @@ function update(dt) {
     dance(W8.dad); if (!S.held.some(Boolean) || opt.bot) dance(W8.bf);
     S.iconS = 1.2; if (opt.zoom && beat >= 0 && beat % (S.bopRate || 4) === 0) { S.zoomAdd += 0.015 * (S.bopInt ?? 1); S.hudAdd += 0.03 * (S.bopInt ?? 1); }
   }
-  while (S.sa < c.alerts.length && c.alerts[S.sa].t <= t + 200) { const a = c.alerts[S.sa++]; sfx(a.snd, S.start + a.t / 1000); }
-  while (S.sf < c.fires.length && c.fires[S.sf].t <= t + 200) { const f = c.fires[S.sf++]; sfx(f.snd, S.start + f.t / 1000); }
+  while (S.sa < c.alerts.length && c.alerts[S.sa].t <= t + 200) { const a = c.alerts[S.sa++]; sfx(a.snd, atT(a.t)); }
+  while (S.sf < c.fires.length && c.fires[S.sf].t <= t + 200) { const f = c.fires[S.sf++]; sfx(f.snd, atT(f.t)); }
   while (S.ai < c.alerts.length && c.alerts[S.ai].t <= t) S.alert = c.alerts[S.ai++];
   while (S.xi < c.fx.length && c.fx[S.xi].t <= t) runEvent(c.fx[S.xi++], t);
   while (S.oi < c.opp.length && c.opp[S.oi].t <= t) {
@@ -1002,8 +1216,10 @@ function resume() { S.paused = false; closeMenu(); S.held = [0,0,0,0]; ctx.resum
 function exitToSetup() { if (S) { stopAudio(); if (ctx.state === 'suspended') ctx.resume(); } S = null; closeMenu(); $('setup').classList.remove('hide'); }
 
 /* ---------- keys ---------- */
+function toast(txt) { if (S) S.toast = { txt, t0:clock }; }
 addEventListener('keydown', e => {
   if (!S) return;
+  keysDown.add(e.code);
   if (menu) {
     if (['ArrowUp','KeyW'].includes(e.code)) { menu.sel = (menu.sel + menu.items.length - 1) % menu.items.length; markSel(); }
     else if (['ArrowDown','KeyS'].includes(e.code)) { menu.sel = (menu.sel + 1) % menu.items.length; markSel(); }
@@ -1014,16 +1230,36 @@ addEventListener('keydown', e => {
   }
   if (e.code === 'Enter' || e.code === 'Escape') { e.preventDefault(); pause(); return; }
   if (e.code === 'Space') { e.preventDefault(); if (!e.repeat && !opt.bot) dodge(); return; }
+  const both = (a, b) => (e.code === a || e.code === b) && keysDown.has(a) && keysDown.has(b);
+  if (both('BracketLeft', 'BracketRight')) { e.preventDefault(); if (!e.repeat) { opt.bot = !opt.bot; S.held = [0,0,0,0]; toast('Botplay ' + (opt.bot ? 'ON' : 'OFF')); } return; }
+  if (both('Minus', 'Equal')) { e.preventDefault(); if (!e.repeat) { opt.practice = !opt.practice; toast('Practice ' + (opt.practice ? 'ON' : 'OFF')); } return; }
+  if (e.code === 'KeyR' && !e.repeat && !e.ctrlKey && !e.metaKey) { e.preventDefault(); begin(); return; }
+  if (e.code === 'KeyH' && !e.repeat && !e.ctrlKey && !e.metaKey) { e.preventDefault(); opt.hud = !opt.hud; $('o_hud').checked = opt.hud; return; }
   const lane = laneOf(e.code); if (lane < 0) return;
   e.preventDefault(); if (e.repeat) return;
   S.held[lane] = 1;
   if (!opt.bot) press(lane);
 });
 addEventListener('keyup', e => {
+  keysDown.delete(e.code);
   if (!S) return; const lane = laneOf(e.code); if (lane < 0) return;
   S.held[lane] = 0; if (!opt.bot) S.ps[lane] = { a:'static', t0:clock, hold:0 };
 });
-addEventListener('blur', () => { if (S && !S.paused && !S.dead && !S.ended) pause(); });
+addEventListener('blur', () => { keysDown.clear(); if (S && !S.paused && !S.dead && !S.ended) pause(); });
+// touchscreens: the screen is split into 4 lanes; the top right corner pauses
+cv.addEventListener('touchstart', e => {
+  if (!S || menu || S.paused || S.dead || S.ended) return; e.preventDefault();
+  for (const tc of e.changedTouches) {
+    if (tc.clientY < 70 && tc.clientX > innerWidth - 90) { pause(); return; }
+    const ln = Math.max(0, Math.min(3, Math.floor(tc.clientX / innerWidth * 4))); touchL.set(tc.identifier, ln);
+    S.held[ln] = 1; if (!opt.bot) press(ln);
+  }
+}, { passive:false });
+const touchEnd = e => {
+  for (const tc of e.changedTouches) { const ln = touchL.get(tc.identifier); touchL.delete(tc.identifier);
+    if (ln === undefined || !S) continue; if (![...touchL.values()].includes(ln)) { S.held[ln] = 0; if (!opt.bot) S.ps[ln] = { a:'static', t0:clock, hold:0 }; } }
+};
+cv.addEventListener('touchend', touchEnd); cv.addEventListener('touchcancel', touchEnd);
 
 /* ---------- drawing ---------- */
 function fit() { dpr = opt.lq ? 1 : Math.min(devicePixelRatio || 1, 2); cv.width = innerWidth * dpr; cv.height = innerHeight * dpr; }
@@ -1045,6 +1281,16 @@ function shakeOff(t, which) {
   const [d, i] = s[which]; if (t - s.t > d || !i) return [0, 0];
   return [(Math.random() * 2 - 1) * i * 1280, (Math.random() * 2 - 1) * i * 720];
 }
+// the splash animations for one lane in any Psych / Kade splash sheet ("note splash purple 1", "note impact 1 purple"...)
+function splashPre(at, ln) {
+  const k = 'sp' + ln; if (at.memo[k]) return at.memo[k];
+  const col = NCOL[ln], ex = `note splash ${col} `;
+  const names = [...new Set(at.fr.map(f => f.n.replace(/\d+$/, '')))];
+  let l = names.filter(n => n.toLowerCase().startsWith(ex));
+  if (!l.length) l = names.filter(n => /splash|impact/i.test(n) && n.toLowerCase().includes(col));
+  if (!l.length) l = names.filter(n => n.toLowerCase().includes(col));
+  return at.memo[k] = l.sort();
+}
 function draw() {
   const W = innerWidth, H = innerHeight;
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1064,10 +1310,10 @@ function draw() {
     }
     return;
   }
-  for (const sp of w.stage.sprites) if (!sp.front) drawSprite(sp, W, H, Z, cx, cy);
-  world(W, H, Z, cx, cy);
-  drawChar(w.gf); drawChar(w.dad); drawChar(w.bf);
-  for (const sp of w.stage.sprites) if (sp.front) drawSprite(sp, W, H, Z, cx, cy);
+  for (const o of w.order) {
+    if (o.sp) drawSprite(o.sp, W, H, Z, cx, cy);
+    else { world(W, H, Z, cx, cy); drawChar(w[o.ch]); }
+  }
   world(W, H, Z, cx, cy);
   if (w.kbSaw && S.kb && (c.dodge || c.fires.length)) {
     const fr = frames(w.kbSaw, 'kb_attack_animation_' + S.kb.a), f = frameAt(fr, S.kb.t0, 24, false);
@@ -1108,8 +1354,12 @@ function draw() {
   g.setTransform(dpr * k, 0, 0, dpr * k, dpr * (W / 2 - 640 * k + hx * k), dpr * (H / 2 - 360 * k + hy * k));
   const px = 0.45 * speedNow(t), SY = opt.down ? 615 : 105, NS = .7, D = opt.down ? -1 : 1, mids = opt.mid;
   const lane = (opp, i) => mids ? 640 + (i - 1.5) * 112 : (opp ? 92 : 732) + 112 * i + 55;
+  const ns = w.ns;
   const strum = (opp, i, st) => {
     const x = lane(opp, i);
+    if (ns && ns.strum) { const P = ns.strum.pre[i], at = ns.strum.at, pre = P[st.a] || P.static;
+      const f = (pre && frameAt(frames(at, pre), st.t0, 24, false)) || (P.static && frames(at, P.static)[0]);
+      if (f) { dcenter(at, f, x, SY, ns.strum.s); return; } }
     if (!w.notes) { const lit = st.a === 'confirm'; arrow(x, SY, 100, i, lit ? COL[i] : '#3a3340', lit ? '#fff' : '#8f8697'); return; }
     const pre = st.a === 'static' ? 'arrow' + DIRS[i] : DIRS[i].toLowerCase() + ' ' + st.a;
     dcenter(w.notes, frameAt(frames(w.notes, pre), st.t0, 24, false) || frames(w.notes, 'arrow' + DIRS[i])[0], x, SY, NS);
@@ -1117,6 +1367,15 @@ function draw() {
   const tail = (atl, i, x, y0, y1) => {
     if (Math.abs(y1 - y0) < 1) return;
     const top = Math.min(y0, y1), bot = Math.max(y0, y1), up = y1 < y0;
+    if (atl === 'ns') {
+      // V-Slice hold sheet: 8 columns, piece then end for each direction
+      const im = ns.hold.img, cw = im.width / 8, hs = ns.hold.s, ww = cw * hs, eh = Math.min(im.height * hs, bot - top), sh = eh / hs, sy = im.height - sh;
+      g.globalAlpha = .7;
+      if (!up) { g.drawImage(im, 2 * i * cw, 0, cw, im.height, x - ww / 2, y0, ww, Math.max(0, y1 - eh - y0)); g.drawImage(im, (2 * i + 1) * cw, sy, cw, sh, x - ww / 2, y1 - eh, ww, eh); }
+      else { g.drawImage(im, 2 * i * cw, 0, cw, im.height, x - ww / 2, y1 + eh, ww, Math.max(0, y0 - y1 - eh));
+        g.save(); g.translate(0, y1 + eh); g.scale(1, -1); g.drawImage(im, (2 * i + 1) * cw, sy, cw, sh, x - ww / 2, 0, ww, eh); g.restore(); }
+      g.globalAlpha = 1; return;
+    }
     if (!atl) { g.globalAlpha = .6; g.fillStyle = COL[i]; g.fillRect(x - 16, top, 32, bot - top); g.globalAlpha = 1; return; }
     const pc = frames(atl, NCOL[i] + ' hold piece')[0], en = frames(atl, i === 0 ? 'pruple end hold' : NCOL[i] + ' hold end')[0], q = atl.q || 1;
     g.globalAlpha = .6;
@@ -1132,32 +1391,39 @@ function draw() {
     }
     g.globalAlpha = 1;
   };
+  const tatl = n => n.tex ? (w.tex[n.tex] || w.notes) : ns && ns.hold ? 'ns' : w.notes;
   const note = (n, x, y) => {
     if (n.invis) return;
     const atl = n.tex ? w.tex[n.tex] : w.notes;
-    if (n.len > 0) tail(atl || w.notes, n.lane, x, y, y + D * n.len * px);
+    if (n.len > 0) tail(tatl(n), n.lane, x, y, y + D * n.len * px);
+    if (!n.tex && ns && ns.note) { const f = frames(ns.note.at, ns.note.pre[n.lane])[0]; if (f) { dcenter(ns.note.at, f, x, y, ns.note.s); return; } }
     const f = atl && (frames(atl, NCOL[n.lane] + '0')[0] || frames(atl, NCOL[n.lane])[0]);
     if (f) { dcenter(atl, f, x, y, NS); return; }
     if (n.avoid) { arrow(x, y, 100, n.lane, '#111', '#ff2a3c'); g.strokeStyle = '#ff2a3c'; g.lineWidth = 8; g.beginPath(); g.moveTo(x-18,y-18); g.lineTo(x+18,y+18); g.moveTo(x+18,y-18); g.lineTo(x-18,y+18); g.stroke(); }
     else arrow(x, y, 100, n.lane, COL[n.lane], '#000');
   };
+  if (opt.under) { g.fillStyle = 'rgba(0,0,0,.55)'; g.fillRect(lane(false, 0) - 60, -10, 112 * 3 + 120, 740); if (!mids && opt.opp) g.fillRect(lane(true, 0) - 60, -10, 112 * 3 + 120, 740); }
   for (let i = 0; i < 4; i++) {
     const pst = S.ps[i];
     const st = !opt.bot && S.held[i] && pst.a === 'static' ? { a:'press', t0:pst.t0 } : pst;
-    if (!mids) strum(true, i, S.os[i]); strum(false, i, st);
+    if (!mids && opt.opp) strum(true, i, S.os[i]); strum(false, i, st);
   }
-  for (const n of S.holds) tail(n.tex ? w.tex[n.tex] : w.notes, n.lane, lane(false, n.lane), SY, SY + D * (n.t + n.len - t) * px);
+  for (const n of S.holds) tail(tatl(n), n.lane, lane(false, n.lane), SY, SY + D * (n.t + n.len - t) * px);
   for (let i = S.ni; i < c.notes.length; i++) {
     const n = c.notes[i], y = SY + D * (n.t - t) * px; if ((n.t - t) * px > 800) break;
     if (!n.hit && !n.miss) note(n, lane(false, n.lane), y);
   }
-  if (!mids) for (let i = Math.max(0, S.oi - 40); i < c.opp.length; i++) {
+  if (!mids && opt.opp) for (let i = Math.max(0, S.oi - 40); i < c.opp.length; i++) {
     const n = c.opp[i], y = SY + D * (n.t - t) * px; if ((n.t - t) * px > 800) break;
     if (n.t > t) note(n, lane(true, n.lane), y);
-    else if (n.len > 0 && n.t + n.len > t && !n.invis) tail(n.tex ? w.tex[n.tex] : w.notes, n.lane, lane(true, n.lane), SY, SY + D * (n.t + n.len - t) * px);
+    else if (n.len > 0 && n.t + n.len > t && !n.invis) tail(tatl(n), n.lane, lane(true, n.lane), SY, SY + D * (n.t + n.len - t) * px);
   }
-  if (w.splash) for (const s of S.splashes) {
-    g.globalAlpha = .6; dcenter(w.splash, frameAt(frames(w.splash, `note splash ${NCOL[s.lane]} ${s.v}`), s.t0, 24, false), lane(false, s.lane), SY, 1); g.globalAlpha = 1;
+  for (const s of S.splashes) {
+    if (ns && ns.splash && ns.splash.pre[s.lane].length) { const sp = ns.splash, pl = sp.pre[s.lane];
+      g.globalAlpha = sp.alpha; dcenter(sp.at, frameAt(frames(sp.at, pl[(s.v - 1) % pl.length]), s.t0, 24, false), lane(false, s.lane), SY, 1); g.globalAlpha = 1; continue; }
+    if (!w.splash) continue;
+    const pl = splashPre(w.splash, s.lane); if (!pl.length) continue;
+    g.globalAlpha = .6; dcenter(w.splash, frameAt(frames(w.splash, pl[(s.v - 1) % pl.length]), s.t0, 24, false), lane(false, s.lane), SY, 1); g.globalAlpha = 1;
   }
   // saw warning, in the middle of the screen
   if (S.alert && t - S.alert.t < 700) {
@@ -1178,6 +1444,7 @@ function draw() {
       if (img) g.drawImage(img, 408 - img.width * .35, y - img.height * .35, img.width * .7, img.height * .7);
       else if (!S.pop.r) text('MISS', 408, y, 56, '#ff4a5a');
       else text(S.pop.r.toUpperCase(), 408, y, 56, '#fff');
+      if (opt.ms && S.pop.r && S.pop.ms !== undefined) text(`${S.pop.ms > 0 ? '+' : ''}${S.pop.ms.toFixed(1)}ms`, 520, y + 40, 26, { sick:'#00e5ff', good:'#44e500', bad:'#e5b000', shit:'#e53b00' }[S.pop.r] || '#fff');
       if (S.pop.r) {
         String(S.pop.combo).padStart(3, '0').split('').forEach((d, i) => { const im = w.nums[+d], x = 340 + 43 * i, yy = y + 90 + 40 * dt * dt;
           if (im) g.drawImage(im, x - im.width * .25, yy - im.height * .25, im.width * .5, im.height * .5); else text(d, x, yy, 44, '#fff'); });
@@ -1185,7 +1452,9 @@ function draw() {
       g.globalAlpha = 1;
     }
   }
+  const F = w.font || 'VT323';
   // health bar + icons
+  if (!opt.hud) {
   const hp = Math.max(0, Math.min(1, S.health / 2)), bw = 601, bh = 19, bx = 640 - bw / 2, by = opt.down ? 79 : 641;
   const rgb = a => `rgb(${a[0]},${a[1]},${a[2]})`;
   g.fillStyle = '#000'; g.fillRect(bx, by, bw, bh);
@@ -1199,7 +1468,6 @@ function draw() {
     g.drawImage(im, two && lose ? fw : 0, 0, fw, im.height, 0, 0, isz, isz * im.height / fw); g.restore();
   };
   icon(w.bf, split - 26, hp < .2, true); icon(w.dad, split - isz + 26, hp > .8, false);
-  const F = w.font || 'VT323';
   const sc = S.health < .55 ? '#B20000' : S.health > 1.75 ? '#44E500' : '#A0A0A0';
   text(`Score: ${S.score} | Misses: ${S.misses} | ${ratingTxt()}`, 640, by + 36, 24, sc, 'center', F);
   // time bar
@@ -1207,6 +1475,7 @@ function draw() {
     const ty = opt.down ? 688 : 12;
     g.fillStyle = '#000'; g.fillRect(440, ty, 400, 20); g.fillStyle = '#004B69'; g.fillRect(444, ty + 4, 392 * p, 12);
     text(`${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, '0')}`, 640, ty + 10, 33, '#00B4CC', 'center', F); }
+  }
   // 3, 2, 1, go
   if (S.cd) { const a = 1 - (clock - S.cd.t0) / 400, im = w.count[S.cd.k];
     if (a > 0) { g.globalAlpha = a; if (im && im.width >= 1000) g.drawImage(im, 0, 0, 1286, 730); else if (im) g.drawImage(im, 640 - im.width / 2, 360 - im.height / 2); else text(S.cd.k.toUpperCase(), 640, 360, 120, '#fff'); g.globalAlpha = 1; } }
@@ -1224,11 +1493,15 @@ function draw() {
   }
   /* --- corner labels in screen space --- */
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
-  text(`${c.name} ${opt.diff.toUpperCase()}`, W - 12, 18, 24, '#fff', 'right');
-  text(`Blueballed: ${opt.blue}`, W - 12, 40, 20, '#fff', 'right');
-  if (opt.practice) text('PRACTICE MODE', W - 12, 62, 20, '#fff', 'right');
+  if (!opt.hud) {
+    text(`${c.name} ${opt.diff.toUpperCase()}`, W - 12, 18, 24, '#fff', 'right');
+    text(`Blueballed: ${opt.blue}`, W - 12, 40, 20, '#fff', 'right');
+    if (opt.practice) text('PRACTICE MODE', W - 12, 62, 20, '#fff', 'right');
+  }
+  if (S.toast && clock - S.toast.t0 < 1200) { g.globalAlpha = Math.min(1, (1200 - (clock - S.toast.t0)) / 300); text(S.toast.txt, W / 2, 16, 20, '#fff'); g.globalAlpha = 1; }
   if (opt.bot) { g.globalAlpha = .5; g.font = '8px VT323, monospace'; g.textAlign = 'left'; g.textBaseline = 'top'; g.fillStyle = '#00B4CC'; g.fillText('BOTPLAY', 2, 2); g.globalAlpha = 1; }
 }
+if (location.hash === '#dbg') window.__dbg = () => ({ S, W8, chart, opt, lib });
 (function loop() {
   const n = performance.now(), dt = Math.min(100, n - lastFrame); lastFrame = n;
   if (S && !S.paused) clock += dt;
