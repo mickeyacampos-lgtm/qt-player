@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>QT Chart Player</title>
+<title>FNF Mod Player</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
 <style>
@@ -44,11 +44,11 @@ button:focus-visible,select:focus-visible,.pick:focus-within{outline:3px solid #
 <canvas id="cv"></canvas>
 
 <div id="setup" class="screen"><div class="card">
-  <h1>QT Chart Player</h1>
-  <p>Pick your Vs QT C.I. Edition folder. It reads every chart JSON, events.json, week, stage and character file, the songs, the sprites and the sounds right off your computer. Nothing gets uploaded.</p>
+  <h1>FNF Mod Player</h1>
+  <p>Pick any FNF mod folder or mod zip: Psych Engine, Kade, the base game (V-Slice) or Codename. It finds every song, chart, character, stage, note type and sound in it by itself, right off your computer. Nothing gets uploaded.</p>
   <button id="again" class="go hide" style="margin:0 0 6px"></button>
-  <label class="pick">Pick the game folder<input id="dir" type="file" webkitdirectory multiple></label>
-  <label class="pick">Or pick the mod .zip (no unzipping needed)<input id="zip" type="file" accept=".zip,application/zip"></label>
+  <label class="pick">Pick a mod folder<input id="dir" type="file" webkitdirectory multiple></label>
+  <label class="pick">Or pick a mod .zip (no unzipping needed)<input id="zip" type="file" accept=".zip,application/zip"></label>
   <label class="pick">Or pick files: Inst.ogg, Voices.ogg, a chart .json and the saw sounds<input id="files" type="file" multiple accept=".json,.ogg,.mp3"></label>
   <div id="status"></div>
   <div id="opts" class="hide">
@@ -127,14 +127,15 @@ const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>'
 const slug = s => String(s || '').trim().toLowerCase().replace(/\s+/g, '-');
 const readJson = async f => JSON.parse((await f.text()).replace(/^﻿/, ''));
 
-/* ---------- finding the game's files ---------- */
+/* ---------- finding the game's files (any FNF mod: Psych, V-Slice, Codename, Kade) ---------- */
+const TOP = ['images','data','songs','characters','stages','weeks','sounds','music','fonts','custom_notetypes','custom_events','scripts','notetypes'];
+const EXTRA_SND = ['intro3','intro2','intro1','introgo','missnote1','missnote2','missnote3'];
 async function scan(list) {
   const entries = [], loose = { charts:{} }, hz0 = {};
   for (const f of list) {
     const p = (f.webkitRelativePath || '').replace(/\\/g,'/').toLowerCase();
-    const m = p.match(/(?:^|\/)((?:assets|mods)\/.*)$/);
-    if (m) entries.push([m[1], f]);
-    else if (!p) {
+    if (p) entries.push([p, f]);
+    else {
       const n = f.name.toLowerCase();
       if (/^inst\.(ogg|mp3)$/.test(n)) loose.inst = f;
       else if (/^voices\.(ogg|mp3)$/.test(n)) loose.voices = f;
@@ -145,67 +146,104 @@ async function scan(list) {
   }
   await build(entries, loose, hz0);
 }
+// a "root" is any folder that holds images/, data/, songs/... (assets/, assets/shared/, mods/, mods/SomeMod/, or a bare mod folder)
+function rootsOf(keys) {
+  const set = new Set();
+  for (const k of keys) { const p = k.split('/'); for (let i = 0; i < p.length - 1; i++) if (TOP.includes(p[i])) { set.add(i ? p.slice(0, i).join('/') + '/' : ''); break; } }
+  const rank = r => (/(^|\/)mods\//.test(r) ? 300 : /(^|\/)assets\//.test(r) ? 200 : 100) + r.split('/').length;
+  return [...set].sort((a, b) => rank(b) - rank(a));
+}
+const rootOfKey = k => lib.roots.filter(r => k.startsWith(r)).sort((a, b) => b.length - a.length)[0] ?? '';
+function find(sub) {
+  sub = sub.toLowerCase();
+  for (const r of lib.prefer != null ? [lib.prefer, ...lib.roots] : lib.roots) { const k = r + sub, f = lib.files.get(k); if (f) { used.set(k, f); return f; } }
+  return null;
+}
 async function build(entries, loose = { charts:{} }, hz = {}) {
   used.clear();
-  const files = new Map(entries), songs = {};
-  // sounds
+  const files = new Map(entries), songs = {}, roots = rootsOf(files.keys());
+  lib = { files, roots, prefer:null, songs, hz, hzb:null, weekOf:{}, keyOf:new Map([...files].map(([k, f]) => [f, k])) };
+  cache = new Map(); bufs = {};
   for (const [k, f] of files) {
-    const m = k.match(/(?:^|\/)(?:sounds\/hazard|mods\/sounds)\/([^\/]+)\.ogg$/); if (m && SOUNDS.includes(m[1])) hz[m[1]] ??= f;
-    const c = k.match(/^mods\/sounds\/3,2,1,go!\/(1|2|3|go)\.ogg$/); if (c) hz['cd' + c[1]] ??= f;
+    const m = k.match(/(?:^|\/)sounds\/(?:hazard\/)?([^\/]+)\.(?:ogg|mp3)$/);
+    if (m && (SOUNDS.includes(m[1]) || EXTRA_SND.includes(m[1]))) hz[m[1]] ??= f;
+    const c = k.match(/(?:^|\/)sounds\/3,2,1,go!\/(1|2|3|go)\.ogg$/); if (c) hz['cd' + c[1]] ??= f;
   }
-  // weeks: song order and week names
+  // weeks (Psych weeks/*.json, V-Slice data/levels/*.json): song order and week names
   const weekOf = {}, order = [];
-  for (const [k, f] of [...files].filter(([k]) => /^(assets|mods)\/weeks\/[^\/]+\.json$/.test(k)).sort()) {
-    try { const w = await readJson(f); for (const s of w.songs || []) { const n = slug(s[0]); if (!weekOf[n]) { weekOf[n] = w.weekName || w.storyName || ''; order.push(n); } } } catch (e) {}
+  for (const [, f] of [...files].filter(([k]) => /(?:^|\/)(weeks|data\/levels)\/[^\/]+\.json$/.test(k)).sort((a, b) => a[0].localeCompare(b[0]))) {
+    try { const w = await readJson(f); for (const s of w.songs || []) { const n = slug(Array.isArray(s) ? s[0] : (s && s.name) || s); if (n && !weekOf[n]) { weekOf[n] = String(w.weekName || w.storyName || w.name || '').trim(); order.push(n); } } } catch (e) {}
   }
-  // charts: every json under data/<song>/ that really is a chart
-  const cand = [...files].filter(([k]) => /^(assets|mods)\/data\/[^\/]+\/[^\/]+\.json$/.test(k) && !/\/(events|dialogue[^\/]*|message)\.json$/.test(k));
+  // charts: open every json that could be one and keep the real charts
+  const cand = [...files].filter(([k]) => k.endsWith('.json') && /(?:^|\/)(data|songs)\//.test(k)
+    && !/(?:^|\/)(events|dialogue[^\/]*|message[^\/]*|meta|pack|credits)\.json$/.test(k) && !/-metadata[^\/]*\.json$/.test(k)
+    && !/(?:^|\/)data\/(characters|stages|levels|notestyles|players|ui|freeplay|dialogue|story)\//.test(k));
   let done = 0;
   for (const [k, f] of cand) {
-    status(`Reading charts… ${++done}/${cand.length}`);
-    const [, root, folder, base] = k.match(/^(assets|mods)\/data\/([^\/]+)\/([^\/]+)\.json$/);
+    if (++done % 4 === 0 || done === cand.length) status(`Reading charts… ${done}/${cand.length}`);
     let j; try { j = await readJson(f); } catch (e) { continue; }
-    const s = j && (j.song && typeof j.song === 'object' ? j.song : j);
-    if (!s || !Array.isArray(s.notes)) continue;
-    const diff = base === folder ? 'normal' : base.startsWith(folder + '-') ? base.slice(folder.length + 1) : base;
-    const song = songs[folder] ??= { charts:{}, name:s.song || folder, folder };
-    song.charts[diff] = f;
-    song.events ??= files.get(`${root}/data/${folder}/events.json`);
-    for (const nm of [folder, slug(s.song)]) for (const r of ['assets','mods']) {
-      song.inst ??= files.get(`${r}/songs/${nm}/inst.ogg`) || files.get(`${r}/songs/${nm}/inst.mp3`);
-      song.voices ??= files.get(`${r}/songs/${nm}/voices.ogg`) || files.get(`${r}/songs/${nm}/voices.mp3`);
+    if (!j || typeof j !== 'object') continue;
+    const parts = k.split('/'), base = parts.at(-1).slice(0, -5), dir = parts.slice(0, -1).join('/') + '/';
+    const ps = j.song && typeof j.song === 'object' ? j.song : j;
+    let fmt, id, diffs, name;
+    if (Array.isArray(ps.notes)) { fmt = 'psych'; id = parts.at(-2); diffs = [base === id ? 'normal' : base.startsWith(id + '-') ? base.slice(id.length + 1) : base]; name = ps.song || id; }
+    else if (j.notes && typeof j.notes === 'object' && !Array.isArray(j.notes)) { fmt = 'vslice'; id = parts.at(-2); diffs = Object.keys(j.notes); name = id; }
+    else if (Array.isArray(j.strumLines)) { fmt = 'codename'; const ci = parts.lastIndexOf('charts'); id = ci > 0 ? parts[ci - 1] : parts.at(-2); diffs = [base]; name = id; }
+    else continue;
+    const root = roots.filter(r => k.startsWith(r)).sort((a, b) => b.length - a.length)[0] ?? '';
+    const key = root + '|' + fmt + '|' + id;
+    const song = songs[key] ??= { key, id, root, fmt, name, charts:{}, dir };
+    if (fmt === 'psych' && ps.song) song.name = ps.song;
+    for (const d of diffs) song.charts[d] = f;
+    if (fmt === 'psych') song.events ??= files.get(dir + 'events.json');
+    if (fmt === 'vslice') song.meta ??= files.get(dir + id + '-metadata.json');
+    if (fmt === 'codename') song.meta ??= files.get(parts.slice(0, parts.lastIndexOf('charts')).join('/') + '/meta.json');
+  }
+  // names from metadata, then find each song's music
+  for (const s of Object.values(songs)) {
+    if (s.meta) try { const m = await readJson(s.meta); s.metaJ = m; s.name = m.songName || m.displayName || m.name || s.name; } catch (e) {}
+    const ids = [...new Set([s.id, slug(s.name)])];
+    outer: for (const r of [s.root, ...roots]) for (const id of ids) for (const sub of [`songs/${id}/`, `songs/${id}/song/`]) {
+      const pre = r + sub, inst = files.get(pre + 'inst.ogg') || files.get(pre + 'inst.mp3');
+      if (!inst) continue;
+      s.inst = inst;
+      const vs = [...files].filter(([k]) => k.startsWith(pre) && /^voices[^\/]*\.(ogg|mp3)$/.test(k.slice(pre.length)) && !/classic/.test(k));
+      const main = vs.find(([k]) => /\/voices\.(ogg|mp3)$/.test(k));
+      const pick = main ? [main] : vs;
+      s.voiceFiles = pick.map(x => x[1]); s.voiceNames = pick.map(x => x[0].slice(pre.length).replace(/\.(ogg|mp3)$/, ''));
+      break outer;
     }
   }
-  if (loose.inst && Object.keys(loose.charts).length) songs['your files'] = { ...loose, name:'Your files', folder:'your files' };
+  if (loose.inst && Object.keys(loose.charts).length) songs['your files'] = { key:'your files', id:'your files', root:'', fmt:'psych', name:'Your files', charts:loose.charts, events:loose.events, inst:loose.inst, voiceFiles:loose.voices ? [loose.voices] : [], voiceNames:['voices'], dir:'' };
   for (const k of Object.keys(songs)) if (!songs[k].inst) delete songs[k];
-  lib = { files, songs, hz, hzb:null, weekOf };
-  cache = new Map(); bufs = {};
-  const names = Object.keys(songs).sort((a, b) => (order.indexOf(a) + 1 || 999) - (order.indexOf(b) + 1 || 999) || a.localeCompare(b));
-  if (!names.length) { status('No playable songs found. Pick the folder that has the game .exe in it.'); $('opts').classList.add('hide'); return; }
-  $('song').innerHTML = names.map(n => `<option value="${esc(n)}">${esc(songs[n].name)}${weekOf[n] ? ' (' + esc(weekOf[n].trim()) + ')' : ''}</option>`).join('');
-  if (songs['censory-overload']) $('song').value = 'censory-overload';
+  Object.assign(lib, { songs, weekOf });
+  const wk = s => order.indexOf(s.id) + 1 || order.indexOf(slug(s.name)) + 1 || 999;
+  const names = Object.keys(songs).sort((a, b) => wk(songs[a]) - wk(songs[b]) || songs[a].name.localeCompare(songs[b].name));
+  if (!names.length) { status(files.size ? 'No playable songs found in that. It needs chart .json files and an Inst.ogg for each song.' : 'Pick a mod folder or zip.'); $('opts').classList.add('hide'); return; }
+  const tag = s => { const m = s.root.match(/mods\/([^\/]+)\/$/); const w = weekOf[s.id] || weekOf[slug(s.name)]; return (w ? ` (${w})` : '') + (m ? ` [${m[1]}]` : ''); };
+  $('song').innerHTML = names.map(n => `<option value="${esc(n)}">${esc(songs[n].name)}${esc(tag(songs[n]))}</option>`).join('');
+  const qt = names.find(n => songs[n].id === 'censory-overload'); if (qt) $('song').value = qt;
   fillDiffs();
-  const saws = SOUNDS.filter(n => hz[n]).length;
-  status(`Found ${names.length} songs from ${cand.length} chart files. Sounds: ${saws}/${SOUNDS.length}. Sprites: ${files.size ? 'yes' : 'no (pick the folder for them)'}.`);
+  const fm = [...new Set(names.map(n => songs[n].fmt))].map(x => ({ psych:'Psych/Kade', vslice:'V-Slice', codename:'Codename' }[x])).join(', ');
+  status(`Found ${names.length} song${names.length > 1 ? 's' : ''} (${fm} charts) from ${cand.length} files. Mod folders: ${roots.length}.`);
   $('opts').classList.remove('hide');
 }
 function fillDiffs() {
   const s = lib.songs[$('song').value]; if (!s) return;
-  const order = ['easy','normal','hard','harder'], rk = d => order.includes(d) ? order.indexOf(d) : 99;
+  const order = ['easy','normal','hard','harder','erect','nightmare'], rk = d => order.includes(d) ? order.indexOf(d) : 99;
   const ds = Object.keys(s.charts).sort((a, b) => rk(a) - rk(b) || a.localeCompare(b));
   $('diff').innerHTML = ds.map(d => `<option value="${esc(d)}">${esc(d.toUpperCase())}</option>`).join('');
-  $('diff').value = ds.includes('harder') ? 'harder' : ds[ds.length - 1];
+  $('diff').value = ds.includes('harder') ? 'harder' : ds.includes('hard') ? 'hard' : ds[ds.length - 1];
   showInfo();
 }
 async function showInfo() {
-  const s = lib.songs[$('song').value], f = s && s.charts[$('diff').value]; if (!f) return;
+  const s = lib.songs[$('song').value], d = $('diff').value; if (!s || !s.charts[d]) return;
   try {
-    const j = await readJson(f), c = j.song || j;
-    let notes = 0, hurt = 0, saws = 0;
-    for (const sec of c.notes) for (const n of sec.sectionNotes || []) if (n[1] >= 0 && n[1] <= 7) { notes++; if (TYPES[n[3]] && TYPES[n[3]].avoid) hurt++; }
-    for (const e of c.events || []) for (const x of e[1] || []) if (x[0] === 'KB_AttackFire' || (x[0] === 'KB_AttackFireDOUBLE' && !x[1])) saws++;
-    $('info').textContent = `${c.bpm} BPM, speed ${c.speed}, ${notes} notes (${hurt} to avoid), ${saws} saws${c.dodgeEnabled === false ? ', dodging off' : ''}. ${c.player1} vs ${c.player2}, stage ${c.stage || 'stage'}.`;
-  } catch (e) { $('info').textContent = ''; }
+    lib.prefer = s.root;
+    const c = await loadChartFor(s, d, null);
+    const avoid = c.notes.filter(n => n.avoid).length;
+    $('info').textContent = `${Math.round(c.bpmMap[0].bpm)} BPM, speed ${+c.speed.toFixed(2)}, ${c.notes.length} notes${avoid ? ` (${avoid} to avoid)` : ''}${c.fires.length ? `, ${c.fires.length} saws` : ''}. ${c.p1} vs ${c.p2}, stage ${c.stage}. ${({ psych:'Psych/Kade', vslice:'V-Slice', codename:'Codename' })[s.fmt]} chart.`;
+  } catch (e) { $('info').textContent = 'Could not read that chart: ' + e.message; }
 }
 $('dir').onchange = e => scan(e.target.files);
 $('files').onchange = e => scan(e.target.files);
@@ -214,8 +252,8 @@ $('zip').onchange = async e => {
   try {
     status('Reading the zip…');
     const list = await readZip(z), entries = [];
-    for (const en of list) { const m = en.path.replace(/\\/g, '/').toLowerCase().match(/(?:^|\/)((?:assets|mods)\/.*)$/); if (m) entries.push([m[1], en]); }
-    if (!entries.length) { status('That zip has no assets or mods folder in it.'); return; }
+    for (const en of list) entries.push([en.path.replace(/\\/g, '/').toLowerCase(), en]);
+    if (!entries.length) { status('That zip is empty.'); return; }
     await build(entries);
   } catch (err) { status('Could not read that zip: ' + err.message); }
 };
@@ -264,7 +302,7 @@ $('diff').onchange = showInfo;
 
 /* ---------- the mod's pixel font ---------- */
 async function loadFont() {
-  const f = file('mods/fonts/pixelfont.ttf'); if (!f) return null;
+  const f = find('fonts/pixelfont.ttf') || find('fonts/vcr.ttf'); if (!f) return null;
   try { const ff = new FontFace('pixelfont', await f.arrayBuffer()); await ff.load(); document.fonts.add(ff); return 'pixelfont'; } catch (e) { return null; }
 }
 
@@ -274,18 +312,19 @@ async function idbSet(k, v) { const db = await idb(); return new Promise((res, r
 async function idbGet(k) { const db = await idb(); return new Promise((res, rej) => { const r = db.transaction('kv').objectStore('kv').get(k); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
 async function saveLast(song, diff) {
   try {
-    const keep = [...lib.files].filter(([k]) => /^(assets|mods)\/weeks\//.test(k) || k.startsWith(`assets/data/${song}/`) || k.startsWith(`mods/data/${song}/`));
+    const so = lib.songs[song];
+    const keep = [...lib.files].filter(([k]) => /(?:^|\/)(weeks|data\/levels)\//.test(k) || (so && so.dir && k.startsWith(so.dir)));
     const all = new Map([...keep, ...used]);
     const ents = [];
     for (const [k, f] of all) if (k && f) ents.push([k, f instanceof Blob ? f : new File([await f.blob()], f.name)]);
-    await idbSet('last', { song, diff, keys:opt.keys, entries:ents });
+    await idbSet('last', { song, name:so ? so.name : song, diff, keys:opt.keys, entries:ents });
   } catch (e) {}
 }
 (async () => {
   try {
     const last = await idbGet('last'); if (!last || !last.entries || !last.entries.length) return;
     const b = $('again'); b.classList.remove('hide');
-    b.textContent = `Play ${last.song} ${String(last.diff).toUpperCase()} again (no folder needed)`;
+    b.textContent = `Play ${last.name || last.song} ${String(last.diff).toUpperCase()} again (no folder needed)`;
     b.onclick = async () => {
       ctx ??= new (window.AudioContext || window.webkitAudioContext)(); ctx.resume();
       b.disabled = true; status('Loading your saved files…');
@@ -298,8 +337,7 @@ async function saveLast(song, diff) {
 })();
 
 /* ---------- sprites (Sparrow sheets: .png + .xml) ---------- */
-const file = rel => { const k = rel.toLowerCase(), f = lib.files.get(k); if (f) used.set(k, f); return f; };
-const imgFile = p => file('mods/images/' + p) || file('assets/shared/images/' + p) || file('assets/images/' + p);
+const imgFile = p => find('images/' + p);
 function loadImg(p) {
   const k = 'img:' + p;
   if (!cache.has(k)) { const f = imgFile(p); cache.set(k, f ? blobOf(f).then(b => createImageBitmap(b)).catch(() => null) : Promise.resolve(null)); }
@@ -345,17 +383,40 @@ function dframe(at, f, x, y, s, flip, sy) {
 }
 const dcenter = (at, f, cx, cy, s, flip) => f && dframe(at, f, cx - f.fw * s / 2, cy - f.fh * s / 2, s, flip);
 
-/* ---------- characters (from the mod's character .json) ---------- */
+/* ---------- characters: Psych .json, V-Slice data/characters .json, Codename .xml ---------- */
+const hexRGB = h => { const m = String(h || '').replace('#', '').match(/^([0-9a-f]{6})/i); return m ? [0, 2, 4].map(i => parseInt(m[1].slice(i, i + 2), 16)) : [161,161,161]; };
+const rangeList = s => !s ? [] : String(s).split(',').flatMap(p => { const r = p.split('..').map(x => parseInt(x)); return r.length === 2 ? Array.from({ length:r[1] - r[0] + 1 }, (_, i) => r[0] + i) : [r[0]]; }).filter(x => !isNaN(x));
+function vsChar(v, name) {
+  return { image:stripLib(v.assetPath), scale:v.scale || 1, flip_x:!!v.flipX, healthicon:(v.healthIcon && v.healthIcon.id) || name, position:v.offsets || [0,0],
+    camera_position:v.cameraOffsets || [0,0], sing_duration:v.singTime || 8, healthbar_colors:[161,161,161], no_antialiasing:!!v.isPixel,
+    animations:(v.animations || []).map(a => ({ anim:a.name, name:a.prefix, fps:a.frameRate || 24, loop:!!a.looped, offsets:a.offsets || [0,0], indices:a.frameIndices || [] })) };
+}
+function cneChar(txt, name) {
+  const d = new DOMParser().parseFromString(txt, 'application/xml').documentElement, a = k => d.getAttribute(k), n = k => parseFloat(a(k)) || 0;
+  return { image:'characters/' + (a('sprite') || name), scale:parseFloat(a('scale')) || 1, flip_x:a('flipX') === 'true', healthicon:a('icon') || name,
+    position:[n('x'), n('y')], camera_position:[n('camx'), n('camy')], sing_duration:parseFloat(a('holdTime')) || 4, healthbar_colors:hexRGB(a('color')), no_antialiasing:a('antialiasing') === 'false',
+    animations:[...d.getElementsByTagName('anim')].map(e => ({ anim:e.getAttribute('name'), name:e.getAttribute('anim'), fps:parseFloat(e.getAttribute('fps')) || 24, loop:e.getAttribute('loop') === 'true',
+      offsets:[parseFloat(e.getAttribute('x')) || 0, parseFloat(e.getAttribute('y')) || 0], indices:rangeList(e.getAttribute('indices')) })) };
+}
+async function charJson(name) {
+  let f;
+  try {
+    if (f = find('characters/' + name + '.json')) return await readJson(f);
+    if (f = find('data/characters/' + name + '.json')) return vsChar(await readJson(f), name);
+    if (f = find('data/characters/' + name + '.xml')) return cneChar(await f.text(), name);
+  } catch (e) {}
+  return null;
+}
 async function loadChar(name, isPlayer) {
   if (!name) return null;
-  const jf = file('mods/characters/' + name + '.json') || file('assets/characters/' + name + '.json'); if (!jf) return null;
-  let j; try { j = await readJson(jf); } catch (e) { return null; }
-  const at = await loadAtlas(j.image); if (!at) return null;
+  const j = await charJson(name); if (!j || !j.image) return null;
+  const at = await loadAtlas(stripLib(j.image)); if (!at) return null;
   const anims = {};
   for (const a of j.animations || []) { const fr = frames(at, a.name, a.indices); if (fr.length) anims[a.anim] = { fr, fps:a.fps || 24, loop:!!a.loop, off:a.offsets || [0,0] }; }
+  if (!Object.keys(anims).length) return null;
   if (isPlayer && !name.startsWith('bf')) for (const m of ['', 'miss']) { const L = anims['singLEFT' + m]; anims['singLEFT' + m] = anims['singRIGHT' + m]; anims['singRIGHT' + m] = L; }
   const s = j.scale || 1, base = anims.idle || anims.danceLeft || Object.values(anims)[0];
-  const icon = await loadImg('icons/icon-' + j.healthicon + '.png') || await loadImg('icons/' + j.healthicon + '.png');
+  const icon = await loadImg('icons/icon-' + j.healthicon + '.png') || await loadImg('icons/' + j.healthicon + '.png') || await loadImg('icons/' + j.healthicon + '/icon.png');
   return { name, at, anims, s, flip:isPlayer ? !j.flip_x : !!j.flip_x, x:0, y:0, cur:'', t0:0, until:-1e9, side:false, sfx:'',
            lr:!!anims.danceLeft, pos:j.position || [0,0], cam:j.camera_position || [0,0], icon, color:j.healthbar_colors || [150,150,150],
            sing:j.sing_duration || 4, smooth:!j.no_antialiasing, w:base ? base.fr[0].fw * s : 0, h:base ? base.fr[0].fh * s : 0 };
@@ -381,10 +442,51 @@ function drawChar(c) {
 }
 const mid = c => [c.x + c.w / 2, c.y + c.h / 2];
 
-/* ---------- reading the chart JSON (+ events.json) ---------- */
-function parse(j, ej) {
+/* ---------- reading charts: Psych / Kade (+ events.json), V-Slice, Codename ---------- */
+const stripLib = p => String(p || '').replace(/^[\w-]+:/, '');
+function guessType(name) { return /hurt|kill|death|mine|poison|bomb|danger|halo|fire|static|corrupt/i.test(String(name || '')) ? { avoid:true, miss:.3, tex:'HURT*' } : {}; }
+function typeOf(name, types) {
+  if (!name || typeof name !== 'string') return {};
+  if (name === 'Alt Animation') return { altType:true };
+  return TYPES[name] || (types && types[name]) || guessType(name);
+}
+const texOf = (ty, skin) => ty.tex ? ty.tex.replace('*', skin) : null;
+// a custom note type's .lua: read what it sets on the notes
+function parseNoteLua(src) {
+  const o = {}; src = src.replace(/--.*$/gm, '');
+  for (const m of src.matchAll(/setPropertyFromGroup\(\s*['"]unspawnNotes['"]\s*,\s*\w+\s*,\s*['"](\w+)['"]\s*,\s*([^)]+?)\s*\)/g)) {
+    let v = m[2].trim(); v = /^['"]/.test(v) ? v.slice(1, -1) : v === 'true' ? true : v === 'false' ? false : isNaN(+v) ? v : +v; o[m[1]] = v;
+  }
+  const t = {};
+  if (typeof o.texture === 'string' && o.texture) t.tex = o.texture.replace(/\.png$/, '');
+  if (o.hitCausesMiss === true || o.ignoreNote === true) t.avoid = true;
+  if (typeof o.missHealth === 'number') t.miss = o.missHealth;
+  if (typeof o.hitHealth === 'number') { t.gain = o.hitHealth; if (o.hitHealth < 0) t.avoid = true; }
+  if (o.noAnimation === true) t.noAnim = true;
+  return t;
+}
+function kbEvents(events) {
+  const alerts = [], fires = [], fx = [];
+  for (const e of events) {
+    const v1 = e.v1.toLowerCase();
+    if (e.name === 'KB_Alert') { const c = Math.max(1, Math.min(4, parseInt(v1) || 1)); alerts.push({ t:e.t, c, snd:ALERT_SND[c] }); }
+    else if (e.name === 'KB_AlertDouble') alerts.push({ t:e.t, c:2, snd:'alertdouble' });
+    else if (e.name === 'KB_AttackFire') fires.push({ t:e.t, snd:{double:'attack-double',triple:'attack-triple',quadruple:'attack-quadruple'}[v1] || 'attack' });
+    else if (e.name === 'KB_AttackFireDOUBLE' && v1 === '') fires.push({ t:e.t, snd:'attack-double' });
+    else fx.push(e);
+  }
+  return { alerts, fires, fx };
+}
+function finish(c) {
+  const by = (a, b) => a.t - b.t;
+  for (const k of ['notes','opp','alerts','fires','fx','secs']) (c[k] ??= []).sort(by);
+  c.chars ??= { bf:new Set(), dad:new Set(), gf:new Set() };
+  for (const e of c.fx) if (e.name === 'Change Character' || e.name === 'Change Character OPTIONAL') { const k = slot(e.v1); if (k) c.chars[k].add(e.v2); }
+  return c;
+}
+function parse(j, ej, types) {
   const s = j.song && typeof j.song === 'object' ? j.song : j;
-  const skin = s.arrowSkin || 'NOTE_assets';
+  const skin = s.arrowSkin || 'NOTE_assets', v1 = String(s.format || '').startsWith('psych_v1');
   const notes = [], opp = [], rawEv = [];
   const secs = [], bpmMap = []; let t = 0, bpm = +s.bpm || 120, beat = 0;
   bpmMap.push({ t:0, bpm, beat:0 });
@@ -396,10 +498,10 @@ function parse(j, ej) {
       const d = +n[1];
       if (d < 0 || typeof n[2] === 'string') { rawEv.push([+n[0], [[n[2], n[3], n[4]]]]); continue; }
       if (!(d >= 0 && d <= 7)) continue;
-      const mine = d > 3 ? !sec.mustHitSection : !!sec.mustHitSection;
-      const ty = TYPES[n[3]] || {};
+      const mine = v1 ? d < 4 : d > 3 ? !sec.mustHitSection : !!sec.mustHitSection;
+      const ty = typeOf(n[3], types);
       (mine ? notes : opp).push({ t:+n[0], lane:d % 4, len:Math.max(0, +n[2] || 0), type:n[3], ...ty,
-        tex:ty.tex ? ty.tex.replace('*', skin) : null, alt:!!sec.altAnim, gf:ty.gf || (!!sec.gfSection && !mine) });
+        tex:texOf(ty, skin), alt:!!sec.altAnim || !!ty.altType, gf:ty.gf || (!!sec.gfSection && !mine) });
     }
     t += beats * 60000 / bpm; beat += beats;
   }
@@ -413,80 +515,160 @@ function parse(j, ej) {
     const e = { t:+ev[0], name:String(sub[0] ?? ''), v1:String(sub[1] ?? ''), v2:String(sub[2] ?? '') };
     const k = `${e.t.toFixed(1)}|${e.name}|${e.v1}|${e.v2}`; if (!e.name || seen.has(k)) continue; seen.add(k); events.push(e);
   }
-  const alerts = [], fires = [], fx = [];
-  for (const e of events) {
-    const v1 = e.v1.toLowerCase();
-    if (e.name === 'KB_Alert') { const c = Math.max(1, Math.min(4, parseInt(v1) || 1)); alerts.push({ t:e.t, c, snd:ALERT_SND[c] }); }
-    else if (e.name === 'KB_AlertDouble') alerts.push({ t:e.t, c:2, snd:'alertdouble' });
-    else if (e.name === 'KB_AttackFire') fires.push({ t:e.t, snd:{double:'attack-double',triple:'attack-triple',quadruple:'attack-quadruple'}[v1] || 'attack' });
-    else if (e.name === 'KB_AttackFireDOUBLE' && v1 === '') fires.push({ t:e.t, snd:'attack-double' });
-    else fx.push(e);
-  }
-  const by = (a, b) => a.t - b.t;
-  [notes, opp, alerts, fires, fx].forEach(a => a.sort(by));
-  const chars = { bf:new Set(), dad:new Set(), gf:new Set() };
-  for (const e of fx) if (e.name === 'Change Character') { const k = slot(e.v1); if (k) chars[k].add(e.v2); }
-  return { notes, opp, alerts, fires, fx, secs, bpmMap, speed:+s.speed || 2, dodge:s.dodgeEnabled !== false,
+  return finish({ notes, opp, ...kbEvents(events), secs, bpmMap, speed:+s.speed || 2, dodge:s.dodgeEnabled !== false, fmt:'psych',
            name:s.song || '', p1:s.player1 || 'bf', p2:s.player2 || 'dad', gf:s.gfVersion || s.player3 || 'gf', stage:s.stage || 'stage',
-           skin, splash:s.splashSkin || 'noteSplashes', chars, needsVoices:s.needsVoices !== false };
+           skin, splash:s.splashSkin || 'noteSplashes', needsVoices:s.needsVoices !== false });
 }
-function slot(v) { v = String(v).toLowerCase().trim(); return ['bf','boyfriend','1'].includes(v) ? 'bf' : ['gf','girlfriend','2'].includes(v) ? 'gf' : ['dad','opponent','0'].includes(v) ? 'dad' : null; }
+// V-Slice (the base game since 0.3): <song>-chart.json + <song>-metadata.json
+function parseVSlice(j, m, d, types) {
+  const pd = m.playData || {}, ch = pd.characters || {};
+  const tc = (m.timeChanges && m.timeChanges.length ? m.timeChanges : [{ t:0, bpm:m.bpm || 120 }]).slice().sort((a, b) => a.t - b.t);
+  const bpmMap = []; let beat = 0;
+  tc.forEach((c, i) => { if (i) beat += (c.t - tc[i - 1].t) / (60000 / tc[i - 1].bpm); bpmMap.push({ t:i ? c.t : 0, bpm:+c.bpm || 120, beat }); });
+  const skin = 'NOTE_assets', notes = [], opp = [], secs = [], fx = [];
+  for (const n of (j.notes && j.notes[d]) || []) {
+    const dd = +n.d; if (!(dd >= 0)) continue;
+    const ty = typeOf(n.k, types);
+    (dd % 8 < 4 ? notes : opp).push({ t:+n.t, lane:dd % 4, len:Math.max(0, +n.l || 0), type:n.k, ...ty, tex:texOf(ty, skin), alt:!!ty.altType });
+  }
+  const stepSec = t => { let b = bpmMap[0].bpm; for (const x of bpmMap) if (x.t <= t) b = x.bpm; return 60 / b / 4; };
+  for (const e of j.events || []) {
+    const v = e.v ?? {}, t = +e.t, o = typeof v === 'object' ? v : { char:v };
+    if (e.e === 'FocusCamera') { const c = +o.char; secs.push({ t, must:c === 0, gf:c === 2, abs:c === -1, x:+o.x || 0, y:+o.y || 0 }); }
+    else if (e.e === 'PlayAnimation') fx.push({ t, name:'Play Animation', v1:String(o.anim || ''), v2:String(o.target || 'dad') });
+    else if (e.e === 'ZoomCamera') fx.push({ t, name:'Set Zoom', v1:String(o.zoom ?? 1), v2:String((o.duration ?? 4) * stepSec(t)), v3:o.mode || 'stage' });
+    else if (e.e === 'ScrollSpeed') fx.push({ t, name:'Change Scroll Speed', v1:String(o.scroll ?? 1), v2:String((o.duration ?? 0) * stepSec(t)) });
+    else if (e.e === 'SetCameraBop') fx.push({ t, name:'Set Camera Bop', v1:String(o.rate ?? 4), v2:String(o.intensity ?? 1) });
+  }
+  const sp = j.scrollSpeed || {};
+  return finish({ notes, opp, alerts:[], fires:[], fx, secs, bpmMap, speed:+(typeof sp === 'number' ? sp : sp[d] ?? sp.default) || 1, dodge:true, fmt:'vslice',
+           name:m.songName || '', p1:ch.player || 'bf', p2:ch.opponent || 'dad', gf:ch.girlfriend || 'gf', stage:pd.stage || 'mainStage',
+           skin, noteStyle:pd.noteStyle || 'funkin', splash:'noteSplashes', needsVoices:true });
+}
+// Codename Engine: songs/<song>/charts/<diff>.json + songs/<song>/meta.json
+function parseCodename(j, m, types) {
+  const sl = j.strumLines || [], bpm0 = +m.bpm || +j.bpm || 120, skin = 'NOTE_assets';
+  const bpmMap = [{ t:0, bpm:bpm0, beat:0 }], notes = [], opp = [], secs = [], fx = [];
+  const evs = (j.events || []).slice().sort((a, b) => a.time - b.time);
+  for (const e of evs) if (e.name === 'BPM Change' && +e.params?.[0] > 0) { const L = bpmMap.at(-1); bpmMap.push({ t:+e.time, bpm:+e.params[0], beat:L.beat + (e.time - L.t) / (60000 / L.bpm) }); }
+  sl.forEach(s => {
+    for (const n of s.notes || []) {
+      const ty = typeOf((j.noteTypes || [])[n.type - 1], types);
+      (s.type === 1 ? notes : opp).push({ t:+n.time, lane:+n.id % 4, len:Math.max(0, +n.sLen || 0), type:(j.noteTypes || [])[n.type - 1], ...ty, tex:texOf(ty, skin), gf:s.type === 2 || ty.gf });
+    }
+  });
+  for (const e of evs) {
+    const p = e.params || [];
+    if (e.name === 'Camera Movement') { const s = sl[+p[0]] || {}; secs.push({ t:+e.time, must:s.type === 1, gf:s.type === 2 }); }
+    else if (e.name === 'Add Camera Zoom') fx.push({ t:+e.time, name:'Add Camera Zoom', v1:String(p[0] ?? .015), v2:'' });
+    else if (e.name === 'Play Animation') { const s = sl[+p[0]] || {}; fx.push({ t:+e.time, name:'Play Animation', v1:String(p[1] || ''), v2:s.type === 1 ? 'bf' : s.type === 2 ? 'gf' : 'dad' }); }
+  }
+  const char = ty => ((sl.find(s => s.type === ty) || {}).characters || [])[0];
+  return finish({ notes, opp, alerts:[], fires:[], fx, secs, bpmMap, speed:+j.scrollSpeed || 1, dodge:true, fmt:'codename',
+           name:m.displayName || m.name || '', p1:char(1) || 'bf', p2:char(0) || 'dad', gf:char(2) || 'gf', stage:j.stage || 'stage',
+           skin, splash:'noteSplashes', needsVoices:m.needsVoices !== false });
+}
+async function loadChartFor(s, d, types) {
+  const j = await readJson(s.charts[d]);
+  if (s.fmt === 'vslice') return parseVSlice(j, s.metaJ || {}, d, types);
+  if (s.fmt === 'codename') return parseCodename(j, s.metaJ || {}, types);
+  const ej = s.events ? await readJson(s.events).catch(() => null) : null;
+  return parse(j, ej, types);
+}
+function slot(v) { v = String(v).toLowerCase().trim(); return ['bf','boyfriend','player','1'].includes(v) ? 'bf' : ['gf','girlfriend','2'].includes(v) ? 'gf' : ['dad','opponent','0'].includes(v) ? 'dad' : null; }
 function seg(t) { let s = chart.bpmMap[0]; for (const m of chart.bpmMap) { if (m.t <= t) s = m; else break; } return s; }
 const crochetAt = t => 60000 / (chart ? seg(t).bpm : 120);
 const beatAt = t => { const s = seg(t); return s.beat + (t - s.t) / (60000 / s.bpm); };
 function secAt(t) { let r = chart.secs[0] || { must:false }; for (const s of chart.secs) { if (s.t <= t) r = s; else break; } return r; }
 
-/* ---------- stage: from the stage .json and its .lua script ---------- */
+/* ---------- stage: Psych .json + .lua, V-Slice data/stages .json, Codename .xml, QT's street ---------- */
+const spr = o => ({ sf:[1,1], sx:1, sy:1, alpha:1, angle:0, vis:true, x:0, y:0, ...o });
 async function loadStage(c) {
-  const sf = file('assets/stages/' + c.stage + '.json') || file('mods/stages/' + c.stage + '.json');
-  let st = {}; try { if (sf) st = await readJson(sf); } catch (e) {}
-  const lua = file('mods/stages/' + c.stage + '.lua') || file('assets/stages/' + c.stage + '.lua');
-  const sprites = [];
+  const sid = c.stage, sprites = [];
+  let st = {}, kind = 'psych';
+  const sj = find('stages/' + sid + '.json'), vj = find('data/stages/' + sid + '.json'), cx = find('data/stages/' + sid + '.xml');
+  if (sj) { try { st = await readJson(sj); } catch (e) {} }
+  else if (vj) {
+    kind = 'vslice';
+    try {
+      const v = await readJson(vj), chs = v.characters || {};
+      st = { defaultZoom:v.cameraZoom || 1, boyfriend:(chs.bf || {}).position || [989, 885], opponent:(chs.dad || {}).position || [335, 885], girlfriend:(chs.gf || {}).position || [751, 787],
+             camera_boyfriend:(chs.bf || {}).cameraOffsets, camera_opponent:(chs.dad || {}).cameraOffsets, camera_girlfriend:(chs.gf || {}).cameraOffsets, hide_girlfriend:!chs.gf };
+      const cz = Math.min(...['bf','dad','gf'].map(k => (chs[k] || {}).zIndex ?? 200));
+      for (const p of v.props || []) {
+        const sc = Array.isArray(p.scale) ? p.scale : [p.scale ?? 1, p.scale ?? 1], an = p.animations || [];
+        const a0 = an.find(a => a.name === p.startingAnimation) || an[0];
+        const o = { x:(p.position || [0,0])[0], y:(p.position || [0,0])[1], sf:p.scroll || [1,1], sx:sc[0], sy:sc[1], alpha:p.alpha ?? 1, front:(p.zIndex ?? 0) > cz, z:p.zIndex ?? 0 };
+        if (String(p.assetPath).startsWith('#')) sprites.push(spr({ ...o, color:p.assetPath, sx:1, sy:1, cw:sc[0], ch:sc[1] }));
+        else sprites.push(spr({ ...o, img:stripLib(p.assetPath), anim:!!a0, prefix:a0 && a0.prefix, fps:(a0 && a0.frameRate) || 24 }));
+      }
+      sprites.sort((a, b) => a.z - b.z);
+    } catch (e) {}
+  } else if (cx) {
+    kind = 'codename';
+    try {
+      const d = new DOMParser().parseFromString(await cx.text(), 'application/xml').documentElement, folder = d.getAttribute('folder') || '';
+      st.defaultZoom = parseFloat(d.getAttribute('zoom')) || 1; let front = false;
+      for (const e of d.children) {
+        const n = k => parseFloat(e.getAttribute(k)), tg = e.tagName.toLowerCase();
+        if (['boyfriend','bf','dad','opponent','girlfriend','gf'].includes(tg)) { front = true; const k = slot(tg); st[{ bf:'boyfriend', dad:'opponent', gf:'girlfriend' }[k]] = [n('x') || 0, n('y') || 0]; continue; }
+        if (tg !== 'sprite') continue;
+        const sc = n('scale') || 1, sr = n('scroll'), an = e.getElementsByTagName('anim')[0];
+        sprites.push(spr({ img:folder + e.getAttribute('sprite'), x:n('x') || 0, y:n('y') || 0, sx:sc, sy:sc, sf:[isNaN(sr) ? n('scrollx') || 1 : sr, isNaN(sr) ? n('scrolly') || 1 : sr],
+          alpha:isNaN(n('alpha')) ? 1 : n('alpha'), front, anim:!!an, prefix:an && an.getAttribute('anim'), fps:an ? parseFloat(an.getAttribute('fps')) || 24 : 24 }));
+      }
+    } catch (e) {}
+  }
+  const lua = find('stages/' + sid + '.lua');
   if (lua) {
-    const src = (await lua.text()).replace(/--.*$/gm, ''), byTag = {};
+    const src = (await lua.text()).replace(/--.*$/gm, ''), byTag = {}, list = [];
     const args = s => [...s.matchAll(/'([^']*)'|"([^"]*)"|(-?[\d.]+)|(true|false)/g)].map(m => m[1] ?? m[2] ?? (m[3] !== undefined ? +m[3] : m[4] === 'true'));
     for (const m of src.matchAll(/(\w+)\s*\(([^()]*)\)/g)) {
       const fn = m[1], a = args(m[2]), sp = byTag[a[0]];
-      if (fn === 'makeLuaSprite' || fn === 'makeAnimatedLuaSprite') byTag[a[0]] = { tag:a[0], img:a[1], x:a[2] || 0, y:a[3] || 0, anim:fn === 'makeAnimatedLuaSprite', sx:1, sy:1, sf:[1,1], alpha:1, angle:0, vis:true };
+      if (fn === 'makeLuaSprite' || fn === 'makeAnimatedLuaSprite') byTag[a[0]] = spr({ tag:a[0], img:a[1], x:a[2] || 0, y:a[3] || 0, anim:fn === 'makeAnimatedLuaSprite' });
       else if (!sp) continue;
       else if (fn === 'addAnimationByPrefix') sp.prefix ??= a[2], sp.fps ??= a[3] || 24;
       else if (fn === 'setScrollFactor') sp.sf = [a[1] ?? 1, a[2] ?? 1];
       else if (fn === 'scaleObject') { sp.sx = a[1] ?? 1; sp.sy = a[2] ?? sp.sx; }
-      else if (fn === 'setProperty') { const p = String(a[0]).split('.')[1]; const v = a[1]; if (p === 'angle') sp.angle = v; else if (p === 'alpha') sp.alpha = v; else if (p === 'visible') sp.vis = v; }
+      else if (fn === 'setGraphicSize') sp.gs = [a[1], a[2]];
+      else if (fn === 'setProperty') { const p = String(a[0]).split('.').slice(1).join('.'); const v = a[1]; if (p === 'angle') sp.angle = v; else if (p === 'alpha') sp.alpha = v; else if (p === 'visible') sp.vis = v; else if (p === 'x') sp.x = v; else if (p === 'y') sp.y = v; else if (p === 'scale.x') sp.sx = v; else if (p === 'scale.y') sp.sy = v; }
       else if (fn === 'doTweenAlpha') { const t2 = byTag[a[1]]; if (t2) t2.alpha = a[2]; }
-      else if (fn === 'addLuaSprite') { sp.front = !!a[1]; sprites.push(sp); }
+      else if (fn === 'addLuaSprite') { sp.front = !!a[1]; list.push(sp); }
     }
-    if (!sprites.length) sprites.push(...Object.values(byTag));
-  } else if (/^street/.test(c.stage) && imgFile('hazard/qt-port/stage/streetBack.png')) {
+    sprites.push(...(list.length ? list : Object.values(byTag)));
+  } else if (/^street/.test(sid) && imgFile('hazard/qt-port/stage/streetBack.png')) {
     // the QT street stages (built in code by the game) from hazard/qt-port/stage
-    const cute = c.stage === 'street-cute' && imgFile('hazard/qt-port/stage/streetBackCute.png') ? 'Cute' : '';
-    const base = { sf:[.9,.9], sx:1, sy:1, alpha:1, angle:0, vis:true };
-    sprites.push({ ...base, tag:'back', img:'hazard/qt-port/stage/streetBack' + cute, x:-750, y:-145, bg:0 },
-                 { ...base, tag:'back', img:'hazard/qt-port/stage/streetBackError', x:-750, y:-145, bg:1 },
-                 { ...base, tag:'back', img:'hazard/qt-port/stage/streetError', x:-750, y:-145, bg:2 },
-                 { ...base, tag:'front', img:'hazard/qt-port/stage/streetFront' + cute, x:-820, y:710, sx:1.15, sy:1.15, bg:0 },
-                 { ...base, tag:'front', img:'hazard/qt-port/stage/streetFrontError', x:-820, y:710, sx:1.15, sy:1.15, bg:12 },
-                 { ...base, tag:'tv', img:'hazard/qt-port/stage/TV_V5', anim:true, tv:true, prefix:'', fps:24, x:-62, y:540, sx:1.2, sy:1.2, sf:[.89,.89] });
-  } else if (/^street/.test(c.stage)) {
-    sprites.push({ img:'DorFA/darkStreetBG', x:-600, y:-200, sf:[.9,.9], sx:1, sy:1, alpha:1, angle:0, vis:true },
-                 { img:'DorFA/tvs', anim:true, prefix:'normal', fps:12, x:-50, y:300, sf:[.9,.9], sx:1, sy:1, alpha:1, angle:0, vis:true },
-                 { img:'DorFA/darkStreetFloor', x:-650, y:650, sf:[.9,.9], sx:1.1, sy:1.1, alpha:1, angle:0, vis:true });
+    const cute = sid === 'street-cute' && imgFile('hazard/qt-port/stage/streetBackCute.png') ? 'Cute' : '';
+    const base = { sf:[.9,.9] };
+    sprites.push(spr({ ...base, tag:'back', img:'hazard/qt-port/stage/streetBack' + cute, x:-750, y:-145, bg:0 }),
+                 spr({ ...base, tag:'back', img:'hazard/qt-port/stage/streetBackError', x:-750, y:-145, bg:1 }),
+                 spr({ ...base, tag:'back', img:'hazard/qt-port/stage/streetError', x:-750, y:-145, bg:2 }),
+                 spr({ ...base, tag:'front', img:'hazard/qt-port/stage/streetFront' + cute, x:-820, y:710, sx:1.15, sy:1.15, bg:0 }),
+                 spr({ ...base, tag:'front', img:'hazard/qt-port/stage/streetFrontError', x:-820, y:710, sx:1.15, sy:1.15, bg:12 }),
+                 spr({ tag:'tv', img:'hazard/qt-port/stage/TV_V5', anim:true, tv:true, prefix:'', fps:24, x:-62, y:540, sx:1.2, sy:1.2, sf:[.89,.89] }));
+  } else if (/^street/.test(sid)) {
+    sprites.push(spr({ img:'DorFA/darkStreetBG', x:-600, y:-200, sf:[.9,.9] }), spr({ img:'DorFA/tvs', anim:true, prefix:'normal', fps:12, x:-50, y:300, sf:[.9,.9] }),
+                 spr({ img:'DorFA/darkStreetFloor', x:-650, y:650, sf:[.9,.9], sx:1.1, sy:1.1 }));
+  } else if (kind === 'psych' && !sprites.length) {
+    // the base game's week 1 stage, used by Psych when a stage has no script
+    sprites.push(spr({ img:'stageback', x:-600, y:-200, sf:[.9,.9] }), spr({ img:'stagefront', x:-650, y:600, sf:[.9,.9], sx:1.1, sy:1.1 }),
+                 spr({ img:'stagecurtains', x:-500, y:-300, sf:[1.3,1.3], sx:.9, sy:.9, front:true }));
   }
   for (const sp of sprites) {
-    if (sp.anim) { sp.at = await loadAtlas(sp.img); sp.fr = sp.at ? frames(sp.at, sp.prefix || '') : []; }
-    else sp.bmp = await loadImg(sp.img + '.png');
+    if (sp.color) continue;
+    if (sp.anim) { sp.at = await loadAtlas(sp.img); sp.fr = sp.at ? frames(sp.at, sp.prefix || '') : []; if (sp.at && !sp.fr.length) sp.fr = frames(sp.at, ''); }
+    if (!sp.fr || !sp.fr.length) { sp.anim = false; sp.fr = null; sp.bmp = await loadImg(sp.img + '.png'); }
+    if (sp.gs && sp.bmp) { if (sp.gs[0]) sp.sx = sp.gs[0] / sp.bmp.width; sp.sy = sp.gs[1] ? sp.gs[1] / sp.bmp.height : sp.sx; }
     if (sp.tv && sp.at) {
-      // TV screens: find each animation in TV_V5 by name
-      const names = [...new Set(sp.at.fr.map(f => f.n.replace(/\d+$/, '')))];
-      const find = re => names.find(n => re.test(n));
-      sp.tvAnims = { idle:find(/idle/i), eye:find(/brutal|eye/i), instructions:find(/instruction/i), gl:find(/good|luck/i), drop:find(/drop/i),
-                     alert:find(/attention|alert/i), error:find(/error/i), '404':find(/blue|404/i), sus:find(/sus/i), watch:find(/watch/i) };
+      const names = [...new Set(sp.at.fr.map(f => f.n.replace(/\d+$/, '')))], fnd = re => names.find(n => re.test(n));
+      sp.tvAnims = { idle:fnd(/idle/i), eye:fnd(/brutal|eye/i), instructions:fnd(/instruction/i), gl:fnd(/good|luck/i), drop:fnd(/drop/i),
+                     alert:fnd(/attention|alert/i), error:fnd(/error/i), '404':fnd(/blue|404/i), sus:fnd(/sus/i), watch:fnd(/watch/i) };
       sp.prefix = sp.tvAnims.idle || names[0] || ''; sp.fr = frames(sp.at, sp.prefix); sp.t0 = 0;
     }
   }
-  const ok = sprites.filter(s => s.vis && s.alpha > 0 && (s.bmp || (s.fr && s.fr.length)));
+  const ok = sprites.filter(s => s.vis && s.alpha > 0 && (s.color || s.bmp || (s.fr && s.fr.length)));
   const hasBg = { 0:true, 1:ok.some(s => s.bg === 1), 2:ok.some(s => s.bg === 2), frontErr:ok.some(s => s.bg === 12) };
-  return { st, sprites:ok, hasBg, tv:ok.find(s => s.tv) };
+  return { st, kind, sprites:ok, hasBg, tv:ok.find(s => s.tv) };
 }
 function drawSprite(sp, W, H, Z, cx, cy) {
   if (opt.lq && sp.tv) return;
@@ -497,6 +679,7 @@ function drawSprite(sp, W, H, Z, cx, cy) {
   }
   world(W, H, Z, cx, cy, sp.sf[0], sp.sf[1]);
   g.globalAlpha = sp.alpha;
+  if (sp.color) { g.fillStyle = sp.color; g.fillRect(sp.x, sp.y, sp.cw, sp.ch); g.globalAlpha = 1; return; }
   const f = sp.fr ? frameAt(sp.fr, sp.t0 || 0, sp.fps || 24, sp.loop !== false) : null;
   const w = (f ? f.fw : sp.bmp.width) * sp.sx, h = (f ? f.fh : sp.bmp.height) * sp.sy;
   if (sp.angle) { g.translate(sp.x + w / 2, sp.y + h / 2); g.rotate(sp.angle * Math.PI / 180); g.translate(-sp.x - w / 2, -sp.y - h / 2); }
@@ -507,25 +690,36 @@ function drawSprite(sp, W, H, Z, cx, cy) {
 async function loadWorld(c) {
   const stage = await loadStage(c), st = stage.st;
   const w = { zoom:st.defaultZoom || 0.9, stage, st, pos:{ bf:st.boyfriend || [770,100], dad:st.opponent || [100,100], gf:st.girlfriend || [400,130] }, pool:{} };
+  const fallback = { bf:'bf', dad:'dad', gf:'gf' };
   const make = async (name, k) => {
     const key = k + ':' + name; if (w.pool[key] !== undefined) return w.pool[key];
-    const ch = await loadChar(name, k === 'bf');
-    if (ch) { ch.x = w.pos[k][0] + ch.pos[0]; ch.y = w.pos[k][1] + ch.pos[1]; }
+    let ch = await loadChar(name, k === 'bf');
+    if (!ch && name !== fallback[k]) ch = await loadChar(fallback[k], k === 'bf');
+    if (ch) {
+      const p = w.pos[k];
+      // V-Slice stages place characters by their feet; Psych and Codename by the top-left corner
+      if (stage.kind === 'vslice') { ch.x = p[0] - ch.w / 2 + ch.pos[0]; ch.y = p[1] - ch.h + ch.pos[1]; }
+      else { ch.x = p[0] + ch.pos[0]; ch.y = p[1] + ch.pos[1]; }
+    }
     return w.pool[key] = ch;
   };
   w.make = make;
   [w.bf, w.dad, w.gf] = await Promise.all([make(c.p1, 'bf'), make(c.p2, 'dad'), st.hide_girlfriend ? null : make(c.gf, 'gf')]);
   for (const k of ['bf','dad','gf']) for (const n of c.chars[k]) await make(n, k);
-  const sk = c.skin || 'NOTE_assets';
-  w.notes = await loadAtlas(sk) || await loadAtlas('NOTE_assets');
+  let sk = c.skin || 'NOTE_assets';
+  if (c.noteStyle && c.noteStyle !== 'funkin') { const f = find('data/notestyles/' + c.noteStyle + '.json'); if (f) try { const ns = await readJson(f); const ap = ns.assets && ns.assets.note && ns.assets.note.assetPath; if (ap) sk = stripLib(ap); } catch (e) {} }
+  w.notes = await loadAtlas(sk) || await loadAtlas('NOTE_assets') || await loadAtlas('notes/NOTE_assets');
   w.tex = {};
-  for (const n of [...c.notes, ...c.opp]) if (n.tex && !(n.tex in w.tex)) w.tex[n.tex] = await loadAtlas(n.tex) || await loadAtlas('HURTNOTE_assets');
+  for (const n of [...c.notes, ...c.opp]) if (n.tex && !(n.tex in w.tex)) w.tex[n.tex] = await loadAtlas(n.tex) || await loadAtlas('HURT' + sk) || await loadAtlas('HURTNOTE_assets');
   w.splash = await loadAtlas(c.splash) || await loadAtlas('noteSplashes');
   w.kbSaw = await loadAtlas('hazard/qt-port/attackv6');
   w.alertNew = await loadAtlas('hazard/qt-port/attack_alert_NEW');
   w.sawKill = await loadAtlas('hazard/qt-port/sawkillanimation2');
   if (c.fx.some(e => e.name === 'Gas Effect')) { w.gas = await loadAtlas('hazard/qt-port/stage/Gas_Release'); w.gasPrefix = w.gas ? (w.gas.fr[0].n.replace(/\d+$/, '')) : ''; }
+  // countdown: the mod's own 3,2,1,go if it has one, otherwise Psych's ready / set / go
   w.count = {}; for (const n of ['3','2','1','go']) w.count[n] = await loadImg('3,2,1,go/' + n + '.png');
+  if (w.count.go) w.cdSeq = [['3','cd3'], ['2','cd2'], ['1','cd1'], ['go','cdgo']];
+  else { for (const n of ['ready','set','go']) w.count[n] = await loadImg(n + '.png') || await loadImg('ui/countdown/funkin/' + n + '.png'); w.cdSeq = [[null,'intro3'], ['ready','intro2'], ['set','intro1'], ['go','introgo']]; }
   w.saw = w.kbSaw ? null : await loadAtlas('DorFA/saw'); w.alert = await loadAtlas('characters/alert');
   w.hb = await loadImg('healthBar.png'); w.rate = {}; w.nums = [];
   for (const r of ['sick','good','bad','shit']) w.rate[r] = await loadImg(r + '.png');
@@ -538,15 +732,23 @@ $('start').onclick = async () => {
     ctx ??= new (window.AudioContext || window.webkitAudioContext)();
     await ctx.resume();
     const key = $('song').value, s = lib.songs[key], d = $('diff').value;
+    if (!s) return;
+    lib.prefer = s.root;
     status('Loading the chart and the music…');
-    const ej = s.events ? await readJson(s.events).catch(() => null) : null;
-    chart = parse(await readJson(s.charts[d]), ej);
+    let ch = await loadChartFor(s, d, null);
+    // custom note types: read each one's .lua so hurt / kill notes act right
+    const tn = [...new Set([...ch.notes, ...ch.opp].map(n => n.type).filter(x => typeof x === 'string' && x && !TYPES[x]))], types = {};
+    for (const n of tn) { const f = find('custom_notetypes/' + n + '.lua'); if (f) try { types[n] = parseNoteLua(await f.text()); } catch (e) {} }
+    if (Object.keys(types).length) ch = await loadChartFor(s, d, types);
+    chart = ch;
     const dec = async f => f ? await ctx.decodeAudioData(await f.arrayBuffer()) : null;
-    if (bufs.key !== key) bufs = { key, inst:await dec(s.inst), voices:await dec(s.voices).catch(() => null) };
-    if (!lib.hzb) { lib.hzb = {}; for (const n of [...SOUNDS, 'cd3', 'cd2', 'cd1', 'cdgo']) if (lib.hz[n]) { try { lib.hzb[n] = await dec(lib.hz[n]); } catch (e) {} } }
+    let vf = s.voiceFiles || [];
+    if ((s.voiceNames || []).length > 1) { const want = [chart.p1, chart.p2].map(x => 'voices-' + String(x).toLowerCase()); const pick = vf.filter((_, i) => want.includes(s.voiceNames[i])); if (pick.length) vf = pick; }
+    const bk = key + '|' + vf.length;
+    if (bufs.key !== bk) bufs = { key:bk, inst:await dec(s.inst), voices:(await Promise.all(vf.map(f => dec(f).catch(() => null)))).filter(Boolean) };
+    if (!lib.hzb) { lib.hzb = {}; for (const n of [...SOUNDS, ...EXTRA_SND, 'cd3', 'cd2', 'cd1', 'cdgo']) if (lib.hz[n]) { try { lib.hzb[n] = await dec(lib.hz[n]); } catch (e) {} } }
     status('Loading the sprites…');
-    used.set(...[...lib.files].find(([, f]) => f === s.charts[d]) || ['', null]);
-    for (const f of [s.inst, s.voices, s.events, ...Object.values(lib.hz)]) { const e = [...lib.files].find(([, x]) => x === f); if (e) used.set(...e); }
+    for (const f of [s.charts[d], s.meta, s.events, s.inst, ...vf, ...Object.values(lib.hz)]) { const k = f && lib.keyOf.get(f); if (k) used.set(k, f); }
     readOpts();
     W8 = await loadWorld(chart);
     W8.font = await loadFont();
@@ -585,7 +787,7 @@ function begin() {
         dead:false, ended:false, paused:false, src:[], sfx:[], zoomAdd:0, hudAdd:0, iconS:1 };
   S.start = ctx.currentTime + 5 * crochetAt(0) / 1000; S.tick = -1; S.cd = null;
   S.gV = ctx.createGain(); S.gV.connect(ctx.destination);
-  for (const [b, out] of [[bufs.inst, ctx.destination], [chart.needsVoices ? bufs.voices : null, S.gV]]) {
+  for (const [b, out] of [[bufs.inst, ctx.destination], ...(chart.needsVoices ? (bufs.voices || []).map(v => [v, S.gV]) : [])]) {
     if (!b) continue;
     const a = ctx.createBufferSource(); a.buffer = b; a.connect(out); a.start(S.start); S.src.push(a);
   }
@@ -598,7 +800,12 @@ const now = () => (ctx.currentTime - S.start) * 1000;
 const songT = () => S.dead ? S.deadAt : now();
 const laneOf = code => { let i = ARROWS.indexOf(code); if (i < 0) i = KEYSETS[opt.keys].indexOf(code); return i; };
 function camTarget(t) {
+  if (S && S.camLock) return S.camLock.slice();
   const sec = secAt(Math.max(0, t)), cs = W8.st;
+  if (sec.abs) return [sec.x, sec.y];
+  const r = camBase(sec, cs); return [r[0] + (sec.x || 0), r[1] + (sec.y || 0)];
+}
+function camBase(sec, cs) {
   if (sec.gf && W8.gf) { const [mx, my] = mid(W8.gf), o = cs.camera_girlfriend || [0,0]; return [mx + W8.gf.cam[0] + o[0], my + W8.gf.cam[1] + o[1]]; }
   const c = sec.must ? W8.bf : W8.dad;
   if (!c) return [640, 360];
@@ -606,6 +813,7 @@ function camTarget(t) {
   if (sec.must) { const o = cs.camera_boyfriend || [0,0]; return [mx - 100 - c.cam[0] + o[0], my - 100 + c.cam[1] + o[1]]; }
   const o = cs.camera_opponent || [0,0]; return [mx + 150 + c.cam[0] + o[0], my - 100 + c.cam[1] + o[1]];
 }
+function zoomMul(t) { const z = S && S.zoomTw; if (!z) return 1; const p = z.dur > 0 ? Math.min(1, Math.max(0, (t - z.t0) / z.dur)) : 1; return z.from + (z.to - z.from) * p; }
 function speedNow(t) { const s = S.spd; const p = s.dur > 0 ? Math.min(1, Math.max(0, (t - s.t0) / s.dur)) : 1; return chart.speed * (s.from + (s.to - s.from) * p); }
 
 function popRating(r) { S.pop = { r, t0:clock, combo:S.combo }; }
@@ -614,7 +822,7 @@ function hurt(amount, lane, n) {
   if (lane >= 0) sing(W8.bf, lane, true); popRating(null);
   if (n && n.sound) sfx(n.sound, 0, 0.5);
 }
-function miss(lane, n) { hurt(n && n.miss !== undefined ? n.miss : 0.0475, lane, n); }
+function miss(lane, n) { sfx('missnote' + (1 + Math.floor(Math.random() * 3)), 0, 0.2); hurt(n && n.miss !== undefined ? n.miss : 0.0475, lane, n); }
 function hitNote(n, t) {
   n.hit = true; S.ps[n.lane] = { a:'confirm', t0:clock, hold:0 };
   if (n.avoid) { hurt(n.miss ?? .3, n.lane, n); return; }
@@ -656,6 +864,9 @@ async function runEvent(e, t) {
   if (n === 'Alarm Gradient') S.alarm[v1.toLowerCase() === 'left' ? 'l' : 'r'] = { t:e.t, a:f2 || .2 };
   else if (n === 'Screen Shake') { const p = s => s.split(',').map(parseFloat); const [gd, gi] = p(v1), [hd, hi] = p(v2);
     S.shake = { t:e.t, g:[(gd || 0) * 1000, gi || 0], h:[(hd || 0) * 1000, hi || 0] }; }
+  else if (n === 'Camera Follow Pos') S.camLock = v1.trim() === '' && v2.trim() === '' ? null : [f1 || 0, f2 || 0];
+  else if (n === 'Set Zoom') { const to = e.v3 === 'direct' ? (f1 || 1) / W8.zoom : (f1 || 1); S.zoomTw = { from:zoomMul(t), to, t0:e.t, dur:(f2 || 0) * 1000 }; }
+  else if (n === 'Set Camera Bop') { S.bopRate = Math.max(1, parseInt(v1) || 4); S.bopInt = isNaN(f2) ? 1 : f2; }
   else if (n === 'Set GF Speed') S.gfSpeed = Math.max(1, parseInt(v1) || 1);
   else if (n === 'Add Camera Zoom') { if (!opt.zoom) return; S.zoomAdd += isNaN(f1) ? .015 : f1; S.hudAdd += isNaN(f2) ? .03 : f2; }
   else if (n === 'newDodgeCooldown') S.cool = (isNaN(f1) ? .1 : f1) * 1000;
@@ -689,13 +900,13 @@ function update(dt) {
   if (S.ended) return;
   const t = now(), c = chart, cro = crochetAt(t);
   if (!S.cam) S.cam = camTarget(0);
-  if (t < 0) { const tick = 4 + Math.floor(t / cro); if (tick !== S.tick && tick >= 0 && tick <= 3) { S.tick = tick; const k = ['3','2','1','go'][tick]; S.cd = { k, t0:clock }; sfx('cd' + k, 0, 1); } }
+  if (t < 0) { const tick = 4 + Math.floor(t / cro); if (tick !== S.tick && tick >= 0 && tick <= 3) { S.tick = tick; const [k, snd] = W8.cdSeq[tick]; S.cd = k ? { k, t0:clock } : null; sfx(snd, 0, 0.6); } }
   const beat = Math.floor(beatAt(t));
   if (beat !== S.beat) {
     S.beat = beat;
     if (W8.gf && beat % S.gfSpeed === 0) dance(W8.gf);
     dance(W8.dad); if (!S.held.some(Boolean) || opt.bot) dance(W8.bf);
-    S.iconS = 1.2; if (opt.zoom && beat >= 0 && beat % 4 === 0) { S.zoomAdd += 0.015; S.hudAdd += 0.03; }
+    S.iconS = 1.2; if (opt.zoom && beat >= 0 && beat % (S.bopRate || 4) === 0) { S.zoomAdd += 0.015 * (S.bopInt ?? 1); S.hudAdd += 0.03 * (S.bopInt ?? 1); }
   }
   while (S.sa < c.alerts.length && c.alerts[S.sa].t <= t + 200) { const a = c.alerts[S.sa++]; sfx(a.snd, S.start + a.t / 1000); }
   while (S.sf < c.fires.length && c.fires[S.sf].t <= t + 200) { const f = c.fires[S.sf++]; sfx(f.snd, S.start + f.t / 1000); }
@@ -839,7 +1050,7 @@ function draw() {
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.fillStyle = '#110b12'; g.fillRect(0, 0, W, H);
   if (!S || !S.cam) return;
-  const t = songT(), c = chart, w = W8, Z = w.zoom * Math.max(W / 1280, H / 720) * (1 + S.zoomAdd);
+  const t = songT(), c = chart, w = W8, Z = w.zoom * zoomMul(t) * Math.max(W / 1280, H / 720) * (1 + S.zoomAdd);
   const [gx, gy] = shakeOff(t, 'g'), cx = S.cam[0] + gx, cy = S.cam[1] + gy;
 
   /* --- world: stage + characters --- */
@@ -998,7 +1209,7 @@ function draw() {
     text(`${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, '0')}`, 640, ty + 10, 33, '#00B4CC', 'center', F); }
   // 3, 2, 1, go
   if (S.cd) { const a = 1 - (clock - S.cd.t0) / 400, im = w.count[S.cd.k];
-    if (a > 0) { g.globalAlpha = a; if (im) g.drawImage(im, 0, 0, 1286, 730); else text(S.cd.k.toUpperCase(), 640, 360, 120, '#fff'); g.globalAlpha = 1; } }
+    if (a > 0) { g.globalAlpha = a; if (im && im.width >= 1000) g.drawImage(im, 0, 0, 1286, 730); else if (im) g.drawImage(im, 640 - im.width / 2, 360 - im.height / 2); else text(S.cd.k.toUpperCase(), 640, 360, 120, '#fff'); g.globalAlpha = 1; } }
 
   /* --- Now Playing / Difficulty boxes (gamesongintro.lua, gamedifficultyintro.lua) --- */
   if (t >= 0 && t < 5500) {
