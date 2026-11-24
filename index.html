@@ -1016,7 +1016,7 @@ function draw() {
   text(`${c.name} ${opt.diff.toUpperCase()}`, W - 12, 18, 24, '#fff', 'right');
   text(`Blueballed: ${opt.blue}`, W - 12, 40, 20, '#fff', 'right');
   if (opt.practice) text('PRACTICE MODE', W - 12, 62, 20, '#fff', 'right');
-  if (opt.bot) text('BOTPLAY', 8, 14, 16, '#00B4CC', 'left', w.font || 'VT323');
+  if (opt.bot) { g.globalAlpha = .5; g.font = '8px VT323, monospace'; g.textAlign = 'left'; g.textBaseline = 'top'; g.fillStyle = '#00B4CC'; g.fillText('BOTPLAY', 2, 2); g.globalAlpha = 1; }
 }
 (function loop() {
   const n = performance.now(), dt = Math.min(100, n - lastFrame); lastFrame = n;
