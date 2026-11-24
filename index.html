@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
 <title>FNF Mod Player</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
@@ -89,6 +90,9 @@ input:focus-visible{outline:3px solid #fff;outline-offset:2px}
         <div><label for="o_off">Note offset (ms)</label><input id="o_off" type="number" min="-500" max="500" step="5" value="0"></div>
       </div>
       <div class="row">
+        <div><label for="o_botsk">Botplay skill: <span id="botskv">100</span> (100 = perfect, lower = more goods, bads, shits and misses)</label><input id="o_botsk" type="range" min="1" max="100" value="100"></div>
+      </div>
+      <div class="row">
         <div><label for="o_vm">Music volume</label><input id="o_vm" type="range" min="0" max="100" value="100"></div>
         <div><label for="o_vv">Voices volume</label><input id="o_vv" type="range" min="0" max="100" value="100"></div>
         <div><label for="o_vs">Sounds volume</label><input id="o_vs" type="range" min="0" max="100" value="100"></div>
@@ -122,12 +126,12 @@ const SOUNDS = ['alert','alertdouble','alerttriple','alertquadruple','attack','a
 // note types, from the mod's custom_notetypes scripts and Psych's built-in ones
 // avoid = hitting it hurts (hitCausesMiss); miss = health lost; gain = health on hit
 const TYPES = {
-  'Hurt Note':           { tex:'HURT*', avoid:true, miss:.3 },
-  'Invisible Hurt Note': { tex:'HURT*', avoid:true, miss:.3, invis:true },
-  'Kill Notes':          { tex:'KILLNOTE_assets', avoid:true, miss:500, sound:'killnote' },
-  'Corrupted Notes':     { tex:'CORRUPTEDNOTE_assets', avoid:true, miss:.75, sound:'corruptednote' },
-  'Crystal Notes':       { tex:'CRYSTALNOTE_assets', avoid:true, miss:.3, sound:'crystalnote' },
-  'Dodge Notes':         { tex:'DODGENOTE_assets', miss:500, gain:0, noAnim:true, dodge:true, sound:'dodgenote' },
+  'Hurt Note':           { tex:'HURT*', avoid:true, mh:.3 },
+  'Invisible Hurt Note': { tex:'HURT*', avoid:true, mh:.3, invis:true },
+  'Kill Notes':          { tex:'KILLNOTE_assets', avoid:true, mh:500, sound:'killnote' },
+  'Corrupted Notes':     { tex:'CORRUPTEDNOTE_assets', avoid:true, mh:.75, sound:'corruptednote' },
+  'Crystal Notes':       { tex:'CRYSTALNOTE_assets', avoid:true, mh:.3, sound:'crystalnote' },
+  'Dodge Notes':         { tex:'DODGENOTE_assets', mh:500, gain:0, noAnim:true, dodge:true, sound:'dodgenote' },
   'Melody Notes':        { tex:'MELODYNOTE_assets', noAnim:true },
   'Invisable Notes':     { invis:true },
   'No Animation':        { noAnim:true },
@@ -136,19 +140,21 @@ const TYPES = {
 let lib = { files:new Map(), songs:{}, hz:{}, hzb:null };
 let cache = new Map();
 let ctx = null, bufs = {}, chart = null, S = null, W8 = null, dpr = 1, clock = 0, lastFrame = performance.now();
-let opt = { bot:false, practice:false, blue:0, keys:'WASD', diff:'', ghost:true, opp:true, rate:1, off:0, speed:0, vm:100, vv:100, vs:100 };
+let opt = { botsk:100, bot:false, practice:false, blue:0, keys:'WASD', diff:'', ghost:true, opp:true, rate:1, off:0, speed:0, vm:100, vv:100, vs:100 };
 const keysDown = new Set(), touchL = new Map();
 let menu = null;
 const used = new Map();
 
 try { const k = localStorage.getItem('qtkeys'); if (k && KEYSETS[k]) $('keys').value = k; } catch (e) {}
 const OPTS = { lq:'o_lq', down:'o_down', mid:'o_mid', splash:'o_splash', flash:'o_flash', zoom:'o_zoom', ghost:'o_ghost', opp:'o_opp', hud:'o_hud', hits:'o_hits',
-               ms:'o_ms', insta:'o_insta', under:'o_under', speed:'o_speed', rate:'o_rate', off:'o_off', vm:'o_vm', vv:'o_vv', vs:'o_vs' };
+               ms:'o_ms', insta:'o_insta', under:'o_under', botsk:'o_botsk', speed:'o_speed', rate:'o_rate', off:'o_off', vm:'o_vm', vv:'o_vv', vs:'o_vs' };
 const isChk = id => $(id).type === 'checkbox', getO = id => isChk(id) ? $(id).checked : (parseFloat($(id).value) || 0);
 try { const o = JSON.parse(localStorage.getItem('qtopts') || '{}'); for (const [k, id] of Object.entries(OPTS)) if (k in o) { if (isChk(id)) $(id).checked = !!o[k]; else $(id).value = o[k]; } } catch (e) {}
+const showSk = () => { $('botskv').textContent = $('o_botsk').value; };
+$('o_botsk').addEventListener('input', showSk); showSk();
 function readOpts() {
   const o = {}; for (const [k, id] of Object.entries(OPTS)) o[k] = getO(id);
-  o.rate = Math.max(0.25, o.rate || 1); o.off = Math.max(-500, Math.min(500, o.off));
+  o.rate = Math.max(0.25, o.rate || 1); o.botsk = Math.max(1, Math.min(100, o.botsk || 100)); o.off = Math.max(-500, Math.min(500, o.off));
   if (o.lq !== opt.lq) cache = new Map();
   Object.assign(opt, o); try { localStorage.setItem('qtopts', JSON.stringify(o)); } catch (e) {}
   fit();
@@ -268,11 +274,15 @@ async function build(entries, loose = { charts:{} }, hz = {}) {
     }
   }
   if (loose.inst && Object.keys(loose.charts).length) songs['your files'] = { key:'your files', id:'your files', root:'', fmt:'psych', name:'Your files', charts:loose.charts, events:loose.events, inst:loose.inst, aud:{ inst:loose.inst, ...(loose.voices ? { voices:loose.voices } : {}) }, dir:'' };
+  const nCharts = Object.keys(songs).length, nInst = [...files.keys()].filter(k => /(^|\/)inst[^\/]*\.(ogg|mp3)$/.test(k)).length;
   for (const k of Object.keys(songs)) if (!songs[k].inst) delete songs[k];
   Object.assign(lib, { songs, weekOf });
   const wk = s => order.indexOf(s.id) + 1 || order.indexOf(slug(s.name)) + 1 || 999;
   const names = Object.keys(songs).sort((a, b) => wk(songs[a]) - wk(songs[b]) || songs[a].name.localeCompare(songs[b].name));
-  if (!names.length) { status(files.size ? 'No playable songs found in that. It needs chart .json files and an Inst.ogg for each song.' : 'Pick a mod folder or zip.'); $('opts').classList.add('hide'); return; }
+  if (!names.length) { status(files.size ? `No playable songs found in that. Read ${files.size} files: ${nCharts} songs with charts, ${nInst} Inst music files. ` +
+      (files.size < 50 ? 'That looks like only part of the mod. Pick the main mod folder (the one with assets, mods or the .exe in it).' :
+       !nInst ? 'No Inst.ogg music anywhere: the songs folder may be missing or not copied over.' : !nCharts ? 'No charts found: the data folder may be missing or not copied over.' :
+       'The charts and the music did not match up. Send a screenshot.') : 'Pick a mod folder or zip.'); $('opts').classList.add('hide'); return; }
   const tag = s => { const m = s.root.match(/mods\/([^\/]+)\/$/); const w = weekOf[s.id] || weekOf[slug(s.name)]; return (w ? ` (${w})` : '') + (m ? ` [${m[1]}]` : ''); };
   $('song').innerHTML = names.map(n => `<option value="${esc(n)}">${esc(songs[n].name)}${esc(tag(songs[n]))}</option>`).join('');
   const qt = names.find(n => songs[n].id === 'censory-overload'); if (qt) $('song').value = qt;
@@ -683,7 +693,7 @@ const mid = c => [c.x + c.w / 2, c.y + c.h / 2];
 
 /* ---------- reading charts: Psych / Kade (+ events.json), V-Slice, Codename ---------- */
 const stripLib = p => String(p || '').replace(/^[\w-]+:/, '');
-function guessType(name) { return /hurt|kill|death|mine|poison|bomb|danger|halo|fire|static|corrupt/i.test(String(name || '')) ? { avoid:true, miss:.3, tex:'HURT*' } : {}; }
+function guessType(name) { return /hurt|kill|death|mine|poison|bomb|danger|halo|fire|static|corrupt/i.test(String(name || '')) ? { avoid:true, mh:.3, tex:'HURT*' } : {}; }
 function typeOf(name, types) {
   if (!name || typeof name !== 'string') return {};
   if (name === 'Alt Animation') return { altType:true };
@@ -699,7 +709,7 @@ function parseNoteLua(src) {
   const t = {};
   if (typeof o.texture === 'string' && o.texture) t.tex = o.texture.replace(/\.png$/, '');
   if (o.hitCausesMiss === true || o.ignoreNote === true) t.avoid = true;
-  if (typeof o.missHealth === 'number') t.miss = o.missHealth;
+  if (typeof o.missHealth === 'number') t.mh = o.missHealth;
   if (typeof o.hitHealth === 'number') { t.gain = o.hitHealth; if (o.hitHealth < 0) t.avoid = true; }
   if (o.noAnimation === true) t.noAnim = true;
   return t;
@@ -1197,15 +1207,28 @@ function hurt(amount, lane, n) {
   if (lane >= 0) sing(W8.bf, lane, true); popRating(null);
   if (n && n.sound) sfx(n.sound, 0, 0.5);
 }
-function miss(lane, n) { sfx('missnote' + (1 + Math.floor(Math.random() * 3)), 0, 0.2); hurt(n && n.miss !== undefined ? n.miss : 0.0475, lane, n); }
+function miss(lane, n) { sfx('missnote' + (1 + Math.floor(Math.random() * 3)), 0, 0.2); hurt(n && typeof n.mh === 'number' ? n.mh : 0.0475, lane, n); }
+// botplay skill 1-100: lower skill = timing further off (good / bad / shit) and more misses, most of all in dense parts
+function gauss() { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
+function botPlan(c, i) {
+  const n = c.notes[i], k = opt.botsk || 100;
+  if (n.bp && n.bp.k === k) return n.bp;
+  if (k >= 100) return n.bp = { k, off:0, skip:false };
+  if (n.dens === undefined) { let d = 0; for (let j = i - 1; j >= 0 && n.t - c.notes[j].t < 250; j--) if (!c.notes[j].avoid) d++; for (let j = i + 1; j < c.notes.length && c.notes[j].t - n.t < 250; j++) if (!c.notes[j].avoid) d++; n.dens = d; }
+  const bad = (100 - k) / 100, hard = 1 + 0.3 * Math.max(0, n.dens - 2);
+  let off = gauss() * (100 - k) * 1.5 * hard;
+  const skip = Math.random() < Math.min(0.95, bad * bad * 0.45 * hard) || Math.abs(off) > 160;
+  off = Math.max(-160, Math.min(160, off));
+  return n.bp = { k, off, skip };
+}
 function hitNote(n, t) {
   n.hit = true; S.ps[n.lane] = { a:'confirm', t0:clock, hold:0 };
-  if (n.avoid) { hurt(n.miss ?? .3, n.lane, n); return; }
+  if (n.avoid) { hurt(typeof n.mh === 'number' ? n.mh : .3, n.lane, n); return; }
   const d = Math.abs(n.t - t);
   const [r, sc, a] = d <= 45 ? ['sick',350,1] : d <= 90 ? ['good',200,.67] : d <= 135 ? ['bad',100,.34] : ['shit',50,0];
   S.score += sc; S.hits++; S.acc += a; S.combo++;
   S.health = Math.min(2, S.health + (n.gain ?? 0.023) * S.gainMul); S.gV.gain.value = 1;
-  popRating(r); S.pop.ms = n.t - t;
+  popRating(r); S.pop.ms = n.t - t; (S.cnt ??= { sick:0, good:0, bad:0, shit:0 })[r]++;
   if (opt.hits) hitsound();
   if (n.dodge) { sfx(n.sound, 0, 0.5); if (W8.bf && play(W8.bf, 'dodge')) W8.bf.until = clock + crochetAt(t); }
   else if (n.gf) sing(W8.gf, n.lane); else if (!n.noAnim) sing(W8.bf, n.lane, false, n.alt);
@@ -1300,7 +1323,10 @@ function update(dt) {
     else if (o.a === 'confirm' && t < o.hold && W8.dad) W8.dad.until = clock + cro * 0.6;
   }
   if (opt.bot) {
-    for (let i = S.ni; i < c.notes.length; i++) { const n = c.notes[i]; if (n.t > t) break; if (!n.hit && !n.miss && !n.avoid) hitNote(n, n.t); }
+    for (let i = S.ni; i < c.notes.length; i++) {
+      const n = c.notes[i]; if (n.t - 200 > t) break; if (n.hit || n.miss || n.avoid) continue;
+      const p = botPlan(c, i); if (!p.skip && t >= n.t + p.off) hitNote(n, n.t + p.off);
+    }
     const f = c.fires[S.fi];
     if (f && f.t - t <= 60 && !(S.dodgeT <= f.t && f.t <= S.dodgeT + S.dodgeMs)) doDodge(t);
     for (let i = 0; i < 4; i++) if (S.ps[i].a === 'confirm' && clock - S.ps[i].t0 > 150 && !S.holds.some(n => n.lane === i)) S.ps[i] = { a:'static', t0:clock, hold:0 };
@@ -1681,9 +1707,13 @@ function draw() {
     text(`${c.name} ${opt.diff.toUpperCase()}`, W - 12, 18, 24, '#fff', 'right');
     text(`Blueballed: ${opt.blue}`, W - 12, 40, 20, '#fff', 'right');
     if (opt.practice) text('PRACTICE MODE', W - 12, 62, 20, '#fff', 'right');
+    // judgement counter
+    const ct = S.cnt || { sick:0, good:0, bad:0, shit:0 };
+    [['Sicks', ct.sick, '#00e5ff'], ['Goods', ct.good, '#44e500'], ['Bads', ct.bad, '#e5b000'], ['Shits', ct.shit, '#e53b00'], ['Misses', S.misses, '#ff4d5e']]
+      .forEach(([l, v, col], i) => text(`${l}: ${v}`, 12, 300 + i * 24, 22, col, 'left'));
   }
   if (S.toast && clock - S.toast.t0 < 1200) { g.globalAlpha = Math.min(1, (1200 - (clock - S.toast.t0)) / 300); text(S.toast.txt, W / 2, 16, 20, '#fff'); g.globalAlpha = 1; }
-  if (opt.bot) { g.globalAlpha = .5; g.font = '8px VT323, monospace'; g.textAlign = 'left'; g.textBaseline = 'top'; g.fillStyle = '#00B4CC'; g.fillText('BOTPLAY', 2, 2); g.globalAlpha = 1; }
+  if (opt.bot) { g.globalAlpha = .5; g.font = '8px VT323, monospace'; g.textAlign = 'left'; g.textBaseline = 'top'; g.fillStyle = '#00B4CC'; g.fillText(opt.botsk < 100 ? 'BOTPLAY ' + opt.botsk : 'BOTPLAY', 2, 2); g.globalAlpha = 1; }
 }
 if (location.hash === '#dbg') window.__dbg = () => ({ S, W8, chart, opt, lib });
 (function loop() {
