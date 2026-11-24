@@ -156,7 +156,23 @@ function readOpts() {
 const status = s => { $('status').textContent = s; };
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const slug = s => String(s || '').trim().toLowerCase().replace(/\s+/g, '-');
-const readJson = async f => JSON.parse((await f.text()).replace(/^﻿/, ''));
+// JSON as Haxe reads it: also takes comments, trailing commas and missing commas between lines
+function looseJson(t) {
+  t = t.replace(/^﻿/, '');
+  try { return JSON.parse(t); } catch (e) {}
+  let o = '', q = false;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (q) { o += c; if (c === '\\') { o += t[++i] ?? ''; } else if (c === '"') q = false; continue; }
+    if (c === '"') { q = true; o += c; continue; }
+    if (c === '/' && t[i + 1] === '/') { while (i < t.length && t[i] !== '\n') i++; o += '\n'; continue; }
+    if (c === '/' && t[i + 1] === '*') { i = t.indexOf('*/', i + 2); if (i < 0) break; i++; continue; }
+    o += c;
+  }
+  o = o.replace(/,(\s*[\]}])/g, '$1').replace(/([\]}"]|\d|true|false|null)(\s*\n\s*)(["{\[])/g, '$1,$2$3');
+  return JSON.parse(o);
+}
+const readJson = async f => looseJson(await f.text());
 
 /* ---------- finding the game's files (any FNF mod: Psych, V-Slice, Codename, Kade) ---------- */
 const TOP = ['images','data','songs','characters','stages','weeks','sounds','music','fonts','custom_notetypes','custom_events','scripts','notetypes'];
@@ -179,8 +195,10 @@ async function scan(list) {
 }
 // a "root" is any folder that holds images/, data/, songs/... (assets/, assets/shared/, mods/, mods/SomeMod/, or a bare mod folder)
 function rootsOf(keys) {
-  const set = new Set();
+  keys = [...keys]; const set = new Set();
   for (const k of keys) { const p = k.split('/'); for (let i = 0; i < p.length - 1; i++) if (TOP.includes(p[i])) { set.add(i ? p.slice(0, i).join('/') + '/' : ''); break; } }
+  // some mods keep charts and music in their own folder: <x>/songs/data/<song>/ and <x>/songs/songs/<song>/
+  for (const k of keys) { const p = k.split('/'); for (let i = 0; i < p.length - 2; i++) if (p[i] === 'songs' && (p[i + 1] === 'data' || p[i + 1] === 'songs')) { set.add(p.slice(0, i + 1).join('/') + '/'); break; } }
   const rank = r => (/(^|\/)mods\//.test(r) ? 300 : /(^|\/)assets\//.test(r) ? 200 : 100) + r.split('/').length;
   return [...set].sort((a, b) => rank(b) - rank(a));
 }
@@ -372,7 +390,13 @@ async function saveLast(song, diff) {
 })();
 
 /* ---------- sprites (Sparrow sheets: .png + .xml) ---------- */
-const imgFile = p => find('images/' + p);
+// images/<p>; if a mod moved the picture into another folder (characters/x/BOYFRIEND.png), find it by its file name
+function imgFile(p) {
+  const f = find('images/' + p); if (f) return f;
+  const b = p.split('/').pop().toLowerCase(); if (!/\.(png|xml|txt)$/.test(b) || /^spritemap/.test(b)) return null;
+  if (!lib.imgBase) { lib.imgBase = new Map(); for (const [k, v] of lib.files) if (/(^|\/)images\//.test(k)) { const n = k.split('/').pop(); if (!lib.imgBase.has(n)) lib.imgBase.set(n, v); } }
+  return lib.imgBase.get(b) || null;
+}
 function loadImg(p) {
   const k = 'img:' + p;
   if (!cache.has(k)) { const f = imgFile(p); cache.set(k, f ? blobOf(f).then(b => createImageBitmap(b)).catch(() => null) : Promise.resolve(null)); }
@@ -384,8 +408,8 @@ function loadAtlas(p) {
   const pr = (async () => {
     const pf = imgFile(p + '.png'), xf = imgFile(p + '.xml'); if (!pf || !xf) return null;
     const pb = await blobOf(pf), hd = new DataView(await pb.slice(0, 24).arrayBuffer());
-    const W0 = hd.getUint32(16), H0 = hd.getUint32(20), q = opt.lq && Math.max(W0, H0) > 2048 ? 0.5 : 1;
-    const [bmp, txt] = await Promise.all([q < 1 ? createImageBitmap(pb, { resizeWidth:Math.max(1, Math.round(W0 * q)), resizeHeight:Math.max(1, Math.round(H0 * q)), resizeQuality:'low' }) : createImageBitmap(pb), xf.text()]);
+    const W0 = hd.getUint32(16), H0 = hd.getUint32(20), q = Math.min(1, (opt.lq ? 2048 : 4096) / Math.max(W0, H0));
+    const [bmp, txt] = await Promise.all([q < 1 ? createImageBitmap(pb, { resizeWidth:Math.max(1, Math.round(W0 * q)), resizeHeight:Math.max(1, Math.round(H0 * q)), resizeQuality:opt.lq ? 'low' : 'medium' }) : createImageBitmap(pb), xf.text()]);
     const doc = new DOMParser().parseFromString(txt, 'application/xml');
     const fr = [...doc.getElementsByTagName('SubTexture')].map((s, i) => {
       const a = k => parseFloat(s.getAttribute(k)) || 0, w = a('width'), h = a('height');
@@ -456,8 +480,8 @@ function loadAnimate(p) {
       if (!mj || !mp) { if (n > 1) break; continue; }
       const m = await readJson(mj), pb = await blobOf(mp);
       const hd = new DataView(await pb.slice(0, 24).arrayBuffer()), W0 = hd.getUint32(16), H0 = hd.getUint32(20);
-      const q = opt.lq && Math.max(W0, H0) > 2048 ? 0.5 : 1;
-      const bmp = await (q < 1 ? createImageBitmap(pb, { resizeWidth:Math.round(W0 * q), resizeHeight:Math.round(H0 * q), resizeQuality:'low' }) : createImageBitmap(pb));
+      const q = Math.min(1, (opt.lq ? 2048 : 4096) / Math.max(W0, H0));
+      const bmp = await (q < 1 ? createImageBitmap(pb, { resizeWidth:Math.round(W0 * q), resizeHeight:Math.round(H0 * q), resizeQuality:opt.lq ? 'low' : 'medium' }) : createImageBitmap(pb));
       for (const s of (m.ATLAS && m.ATLAS.SPRITES) || []) { const o = s.SPRITE || s; spr[o.name] = { bmp, q, x:+o.x, y:+o.y, w:+o.w, h:+o.h, rot:!!o.rotated }; }
     }
     if (!Object.keys(spr).length) return null;
@@ -606,6 +630,7 @@ async function charJson(name, isPlayer) {
     if (f = find('data/characters/' + name + '.json')) {
       const v = await readJson(f), hx = find('scripts/characters/' + name + '.hxc');
       if (!v.animations && hx) return await dnbChar(v, await hx.text(), name, isPlayer);
+      if (v.image && Array.isArray(v.animations) && v.animations.some(a => 'anim' in a)) return v;   // a Psych character kept in data/characters
       return vsChar(v, name);
     }
     if (f = find('data/characters/' + name + '.xml')) return cneChar(await f.text(), name);
@@ -818,7 +843,9 @@ async function loadStage(c) {
   const sid = c.stage, sprites = [];
   let st = {}, kind = 'psych', dv = null;
   const cz = { gf:100, dad:200, bf:300 };
-  const sj = find('stages/' + sid + '.json'), vj = find('data/stages/' + sid + '.json'), cx = find('data/stages/' + sid + '.xml');
+  let sj = find('stages/' + sid + '.json'), vj = find('data/stages/' + sid + '.json'); const cx = find('data/stages/' + sid + '.xml');
+  // a Psych stage kept in data/stages
+  if (!sj && vj) { const t = await readJson(vj).catch(() => null); if (t && ('defaultZoom' in t || 'boyfriend' in t)) { sj = vj; vj = null; } }
   if (sj) {
     try { st = await readJson(sj); } catch (e) {}
     // Psych 1.0 stages list their sprites and the character groups in draw order
@@ -931,16 +958,39 @@ async function loadStage(c) {
     sprites.push(spr({ img:'stageback', x:-600, y:-200, sf:[.9,.9] }), spr({ img:'stagefront', x:-650, y:600, sf:[.9,.9], sx:1.1, sy:1.1 }),
                  spr({ img:'stagecurtains', x:-500, y:-300, sf:[1.3,1.3], sx:.9, sy:.9, front:true }));
   }
+  // stages drawn by the mod's own code (no lua, no objects): lay out the pictures in the stage's folder by their names
+  if (kind === 'psych' && st.directory && sprites.every(x => /^stage(back|front|curtains)$/.test(x.img || ''))) {
+    const v = /night/i.test(sid) ? 'night' : /sunset|dusk/i.test(sid) ? 'sunset' : 'day', d = String(st.directory).toLowerCase();
+    for (const sub of [`${d}/images/${v}/`, `${d}/images/`]) {
+      const l = [...lib.files].filter(([k]) => k.includes('/' + sub) && k.endsWith('.png') && !k.slice(k.indexOf('/' + sub) + sub.length + 1).includes('/'));
+      if (!l.length) continue;
+      sprites.length = 0;
+      for (const [k, f] of l) { const n = k.split('/').pop().slice(0, -4); if (!/light|overlay|glow|shadow/i.test(n)) sprites.push(spr({ file:f, img:n, auto:n })); }
+      break;
+    }
+  }
   for (const sp of sprites) {
     if (sp.color) continue;
     if (sp.anim) { sp.at = await loadAtlas(sp.img); sp.fr = sp.at ? frames(sp.at, sp.prefix || '') : []; if (sp.at && !sp.fr.length) sp.fr = frames(sp.at, ''); }
-    if (!sp.fr || !sp.fr.length) { sp.anim = false; sp.fr = null; sp.bmp = await loadImg(sp.img + '.png'); }
+    if (!sp.fr || !sp.fr.length) { sp.anim = false; sp.fr = null; sp.bmp = sp.file ? await blobOf(sp.file).then(b => createImageBitmap(b)).catch(() => null) : await loadImg(sp.img + '.png'); }
     if (sp.gs && sp.bmp) { if (sp.gs[0]) sp.sx = sp.gs[0] / sp.bmp.width; sp.sy = sp.gs[1] ? sp.gs[1] / sp.bmp.height : sp.sx; }
     if (sp.tv && sp.at) {
       const names = [...new Set(sp.at.fr.map(f => f.n.replace(/\d+$/, '')))], fnd = re => names.find(n => re.test(n));
       sp.tvAnims = { idle:fnd(/idle/i), eye:fnd(/brutal|eye/i), instructions:fnd(/instruction/i), gl:fnd(/good|luck/i), drop:fnd(/drop/i),
                      alert:fnd(/attention|alert/i), error:fnd(/error/i), '404':fnd(/blue|404/i), sus:fnd(/sus/i), watch:fnd(/watch/i) };
       sp.prefix = sp.tvAnims.idle || names[0] || ''; sp.fr = frames(sp.at, sp.prefix); sp.t0 = 0;
+    }
+  }
+  if (sprites.some(s => s.auto)) {
+    const bx = (st.boyfriend || [770, 100]), ox = (st.opponent || [100, 100]), cx = (ox[0] + bx[0] + 350) / 2, gy = bx[1] + 440;
+    const R = [[/sky|^bg|back/i, 0, .1], [/star|moon|sun|cloud/i, 1, .15], [/hill|mountain/i, 2, .45], [/barn|house|build/i, 3, .75], [/ground|floor|grass|land/i, 4, 1], [/sign/i, 5, 1], [/left|right|corn|tree|bush/i, 6, 1]];
+    for (const sp of sprites) if (sp.auto && sp.bmp) {
+      const w = sp.bmp.width, h = sp.bmp.height, r = R.find(x => x[0].test(sp.auto)) || [null, 3, .9], k = r[1];
+      sp.sf = [r[2], r[2]]; sp.z = -1000 + k * 10;
+      sp.x = cx - w / 2;
+      sp.y = k <= 1 ? gy - h + 150 : k === 2 ? gy - h + 60 : k === 3 ? gy - h + 40 : k === 4 ? gy - 60 : k === 5 ? gy - h + 60 : gy - h + 200;
+      if (k === 5) sp.x = cx - 650;
+      if (k === 6) sp.x = /right/i.test(sp.auto) ? cx + 1150 - w : cx - 1150;
     }
   }
   const ok = sprites.filter(s => s.vis && s.alpha > 0 && (s.color || s.bmp || (s.fr && s.fr.length)));
