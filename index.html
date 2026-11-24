@@ -258,7 +258,7 @@ class ZipEntry {
   async text() { return (await this.blob()).text(); }
   async arrayBuffer() { return (await this.blob()).arrayBuffer(); }
 }
-const blobOf = f => f instanceof Blob ? f : f.blob();
+const blobOf = async f => f instanceof Blob ? f : f.blob();
 $('song').onchange = fillDiffs;
 $('diff').onchange = showInfo;
 
