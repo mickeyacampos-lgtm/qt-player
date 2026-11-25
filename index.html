@@ -15,7 +15,7 @@
 *{box-sizing:border-box;min-width:0;border-radius:0}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:20px/1.3 "VT323",ui-monospace,monospace;overflow:hidden}
 canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
-.screen{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(10,5,10,.72);overflow:auto}
+.screen{position:fixed;inset:0;display:flex;align-items:safe center;justify-content:center;padding:16px;background:rgba(10,5,10,.72);overflow:auto}
 .hide{display:none!important}
 .card{width:min(620px,100%);background:var(--panel);border:3px solid var(--red);padding:24px}
 h1{margin:0 0 6px;font-size:52px;line-height:1.05;font-weight:400}
@@ -37,6 +37,9 @@ button:focus-visible,select:focus-visible,.pick:focus-within{outline:3px solid #
 .small{font-size:18px;color:var(--dim)}
 .optbox{border:2px solid #5a4656;margin:12px 0 0;padding:6px 12px 10px}
 .optbox legend{color:var(--dim);padding:0 6px}
+@media (max-width:560px){ .card{padding:14px} h1{font-size:38px} select,button,.pick,input[type=number]{font-size:19px} .list h2{font-size:40px} .list button{font-size:30px;min-height:44px} }
+@media (max-height:520px){ .list h2{font-size:36px} .list button{font-size:26px;min-height:38px;padding:2px 12px} .list{gap:3px} }
+@media (min-width:1900px) and (min-height:1000px){ html,body{font-size:24px} .card{width:min(760px,100%)} h1{font-size:64px} select,button,.pick,input[type=number]{font-size:26px} }
 .chk{display:flex;align-items:center;gap:10px;margin:6px 0;color:var(--ink);cursor:pointer;min-height:32px}
 .chk input{appearance:none;width:22px;height:22px;border:2px solid #8f8697;background:#0d080e;margin:0;flex:none;cursor:pointer}
 .chk input:checked{background:var(--red);border-color:var(--red);box-shadow:inset 0 0 0 4px #0d080e}
@@ -94,9 +97,12 @@ input:focus-visible{outline:3px solid #fff;outline-offset:2px}
       <div class="row">
         <div><label for="o_speed">Scroll speed</label><select id="o_speed"><option value="0">Chart</option><option value="1">1</option><option value="1.5">1.5</option><option value="2">2</option><option value="2.5">2.5</option><option value="3">3</option><option value="3.5">3.5</option><option value="4">4</option><option value="5">5</option></select></div>
         <div><label for="o_rate">Song speed</label><select id="o_rate"><option value="0.5">0.5x</option><option value="0.75">0.75x</option><option value="1" selected>1x</option><option value="1.25">1.25x</option><option value="1.5">1.5x</option><option value="2">2x</option></select></div>
+        <div><label for="o_fit">Screen fit</label><select id="o_fit"><option value="auto">Auto</option><option value="fill">Fill (no black edges)</option><option value="fit">Fit (see the whole stage)</option></select></div>
         <div><label for="o_res">Resolution</label><select id="o_res"><option value="0">Auto (drops if it lags)</option><option value="1">100%</option><option value="0.75">75%</option><option value="0.5">50%</option></select></div>
         <div><label for="o_off">Note offset (ms)</label><input id="o_off" type="number" min="-500" max="500" step="5" value="0"></div>
+        <div><label for="calib">Find my offset</label><button type="button" id="calib">Tap test</button></div>
       </div>
+      <p class="small hide" id="calibMsg" style="margin:6px 0 0"></p>
       <div class="row">
         <div><label for="o_botsk">Botplay skill: <span id="botskv">100</span> (100 = perfect, lower = more goods, bads, shits and misses)</label><input id="o_botsk" type="range" min="1" max="100" value="100"></div>
       </div>
@@ -159,14 +165,14 @@ function dropCache() {
   }).catch(() => {});
 }
 let ctx = null, bufs = {}, chart = null, S = null, W8 = null, dpr = 1, clock = 0, lastFrame = performance.now();
-let opt = { botsk:100, bot:false, practice:false, blue:0, keys:'WASD', diff:'', ghost:true, opp:true, rate:1, off:0, speed:0, vm:100, vv:100, vs:100 };
+let opt = { fit:'auto', botsk:100, bot:false, practice:false, blue:0, keys:'WASD', diff:'', ghost:true, opp:true, rate:1, off:0, speed:0, vm:100, vv:100, vs:100 };
 const keysDown = new Set(), touchL = new Map();
 let menu = null;
 const used = new Map();
 
 try { const k = localStorage.getItem('qtkeys'); if (k && KEYSETS[k]) $('keys').value = k; } catch (e) {}
 const OPTS = { lq:'o_lq', down:'o_down', mid:'o_mid', splash:'o_splash', flash:'o_flash', zoom:'o_zoom', ghost:'o_ghost', opp:'o_opp', hud:'o_hud', hits:'o_hits',
-               ms:'o_ms', insta:'o_insta', under:'o_under', botsk:'o_botsk', fps:'o_fps', res:'o_res', speed:'o_speed', dev:'o_dev', rate:'o_rate', off:'o_off', vm:'o_vm', vv:'o_vv', vs:'o_vs' };
+               ms:'o_ms', insta:'o_insta', under:'o_under', botsk:'o_botsk', fps:'o_fps', res:'o_res', fit:'o_fit', speed:'o_speed', dev:'o_dev', rate:'o_rate', off:'o_off', vm:'o_vm', vv:'o_vv', vs:'o_vs' };
 const isChk = id => $(id).type === 'checkbox', getO = id => { if (isChk(id)) return $(id).checked; const v = $(id).value; return isNaN(parseFloat(v)) ? v : parseFloat(v) || 0; };
 // computer setups: each one sets quality, resolution and splashes for that kind of computer
 const UA = navigator.userAgent, CROS = /CrOS/.test(UA), LOWMEM = (navigator.deviceMemory || 8) <= 4;
@@ -191,6 +197,30 @@ function applyDev(v) {
 $('o_dev').addEventListener('change', () => applyDev($('o_dev').value));
 try { if (!localStorage.getItem('qtopts')) applyDev('auto'); } catch (e) {}
 try { const o = JSON.parse(localStorage.getItem('qtopts') || '{}'); for (const [k, id] of Object.entries(OPTS)) if (k in o) { if (isChk(id)) $(id).checked = !!o[k]; else $(id).value = o[k]; } } catch (e) {}
+// tap test: 16 clicks, tap any key (or the screen) on each one; the average lateness becomes the note offset
+$('calib').addEventListener('click', () => {
+  ctx ??= new (window.AudioContext || window.webkitAudioContext)(); ctx.resume();
+  const msg = $('calibMsg'), N = 16, gap = 0.5, t0 = ctx.currentTime + 1, taps = [];
+  msg.classList.remove('hide'); msg.textContent = 'Listen and tap any key (or the screen) on every click…';
+  for (let i = 0; i < N; i++) {
+    const o = ctx.createOscillator(), gn = ctx.createGain(), at = t0 + i * gap;
+    o.frequency.value = i % 4 ? 900 : 1400; gn.gain.setValueAtTime(0.2, at); gn.gain.exponentialRampToValueAtTime(0.0001, at + 0.06);
+    o.connect(gn).connect(ctx.destination); o.start(at); o.stop(at + 0.07);
+  }
+  const tap = e => {
+    if (e.type === 'keydown' && (e.repeat || e.code === 'Tab')) return;
+    const heard = ctxNow() - Math.max(0, Math.min(0.12, (performance.now() - e.timeStamp) / 1000));
+    const i = Math.round((heard - t0) / gap); if (i >= 2 && i < N) taps.push((heard - (t0 + i * gap)) * 1000);
+  };
+  addEventListener('keydown', tap, true); addEventListener('pointerdown', tap, true);
+  setTimeout(() => {
+    removeEventListener('keydown', tap, true); removeEventListener('pointerdown', tap, true);
+    if (taps.length < 6) { msg.textContent = 'Not enough taps. Try again and tap on every click.'; return; }
+    taps.sort((a, b) => a - b); const med = Math.round(taps[taps.length >> 1] / 5) * 5;
+    $('o_off').value = Math.max(-300, Math.min(300, med));
+    msg.textContent = `You tap ${Math.abs(med)} ms ${med >= 0 ? 'late' : 'early'}, so Note offset is set to ${$('o_off').value} ms.`;
+  }, (1 + N * gap + 0.4) * 1000);
+});
 const showSk = () => { $('botskv').textContent = $('o_botsk').value; };
 $('o_botsk').addEventListener('input', showSk); showSk();
 function readOpts() {
@@ -1233,7 +1263,22 @@ function begin() {
   closeMenu();
   if (ctx.state === 'suspended') ctx.resume();
 }
-const now = () => (ctx.currentTime - S.start) * 1000 * S.rate - opt.off;
+// the moment of the song you are HEARING right now, smooth every frame:
+// ctx.currentTime only moves in steps (big ones on Chromebooks) and runs ahead of the speakers, so use the
+// browser's output timestamp and slide between updates with the frame clock
+let lastCtxT = 0;
+function ctxNow() {
+  let v = ctx.currentTime - (ctx.outputLatency || ctx.baseLatency || 0);
+  if (ctx.state === 'running' && ctx.getOutputTimestamp) {
+    const o = ctx.getOutputTimestamp();
+    if (o && o.contextTime > 0 && o.performanceTime > 0) v = Math.min(ctx.currentTime, o.contextTime + (performance.now() - o.performanceTime) / 1000);
+  }
+  if (v < lastCtxT && lastCtxT - v < 0.05) v = lastCtxT;   // never step backwards a little (jitter)
+  return lastCtxT = v;
+}
+const now = () => (ctxNow() - S.start) * 1000 * S.rate - opt.off;
+// song time when a key went down (the key event can reach us a frame late)
+const nowAt = ts => { const t = now(); if (!ts) return t; const lag = performance.now() - ts; return lag > 0 && lag < 120 ? t - lag * S.rate : t; };
 const songT = () => S.dead ? S.deadAt : now();
 const laneOf = code => { let i = ARROWS.indexOf(code); if (i < 0) i = KEYSETS[opt.keys].indexOf(code); return i; };
 function camTarget(t) {
@@ -1288,8 +1333,8 @@ function hitNote(n, t) {
   if (r === 'sick' && opt.splash && !opt.lq) S.splashes.push({ lane:n.lane, t0:clock, v:1 + (Math.random() < .5 ? 1 : 0) });
   if (n.len > 0) S.holds.push(n);
 }
-function press(lane) {
-  const t = now(); let best = null, bs = 1e9;
+function press(lane, ts) {
+  const t = nowAt(ts); let best = null, bs = 1e9;
   for (let i = S.ni; i < chart.notes.length; i++) {
     const n = chart.notes[i]; if (n.t > t + 166) break;
     if (n.lane !== lane || n.hit || n.miss) continue;
@@ -1480,7 +1525,7 @@ addEventListener('keydown', e => {
   const lane = laneOf(e.code); if (lane < 0) return;
   e.preventDefault(); if (e.repeat) return;
   S.held[lane] = 1;
-  if (!opt.bot) press(lane);
+  if (!opt.bot) press(lane, e.timeStamp);
 });
 addEventListener('keyup', e => {
   keysDown.delete(e.code);
@@ -1496,7 +1541,7 @@ cv.addEventListener('touchstart', e => {
   for (const tc of e.changedTouches) {
     if (tc.clientY < 70 && tc.clientX > innerWidth - 90) { pause(); return; }
     const ln = Math.max(0, Math.min(3, Math.floor(tc.clientX / innerWidth * 4))); touchL.set(tc.identifier, ln);
-    S.held[ln] = 1; if (!opt.bot) press(ln);
+    S.held[ln] = 1; if (!opt.bot) press(ln, e.timeStamp);
   }
 }, { passive:false });
 const touchEnd = e => {
@@ -1569,12 +1614,20 @@ function splashPre(at, ln) {
   if (!l.length) l = names.filter(n => n.toLowerCase().includes(col));
   return at.memo[k] = l.sort();
 }
+// any screen size: tall screens (phones held upright) get the lanes in the middle and a bigger HUD;
+// Fill crops the stage to cover the screen, Fit shows all of the 1280x720 view
+const portrait = (W, H) => W < H * 0.9;
+function scrScale(W, H) {
+  const fit = opt.fit === 'fit' || (opt.fit !== 'fill' && (W / H > 2.4 || W / H < 0.9));
+  return fit ? Math.min(W / 1280, H / 720) * (portrait(W, H) ? 1.6 : 1) : Math.max(W / 1280, H / 720);
+}
+function hudScale(W, H) { return portrait(W, H) && opt.fit !== 'fill' ? Math.min(W / 620, H / 720) : Math.min(W / 1280, H / 720); }
 function draw() {
   const W = innerWidth, H = innerHeight;
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.fillStyle = '#110b12'; g.fillRect(0, 0, W, H);
   if (!S || !S.cam) return;
-  const t = songT(), c = chart, w = W8, Z = w.zoom * zoomMul(t) * Math.max(W / 1280, H / 720) * (1 + S.zoomAdd);
+  const t = songT(), c = chart, w = W8, Z = w.zoom * zoomMul(t) * scrScale(W, H) * (1 + S.zoomAdd);
   const [gx, gy] = shakeOff(t, 'g'), cx = S.cam[0] + gx, cy = S.cam[1] + gy;
 
   /* --- world: stage + characters --- */
@@ -1628,9 +1681,9 @@ function draw() {
   if (opt.flash && S.saw && !S.saw.ok && t - S.saw.t < 350) { g.fillStyle = `rgba(255,0,30,${.35 * (1 - (t - S.saw.t) / 350)})`; g.fillRect(0, 0, W, H); }
 
   /* --- HUD in the game's 1280x720 space --- */
-  const k = Math.min(W / 1280, H / 720) * (1 + S.hudAdd), [hx, hy] = shakeOff(t, 'h');
+  const k = hudScale(W, H) * (1 + S.hudAdd), [hx, hy] = shakeOff(t, 'h');
   g.setTransform(dpr * k, 0, 0, dpr * k, dpr * (W / 2 - 640 * k + hx * k), dpr * (H / 2 - 360 * k + hy * k));
-  const px = 0.45 * speedNow(t), SY = opt.down ? 615 : 105, NS = .7, D = opt.down ? -1 : 1, mids = opt.mid;
+  const px = 0.45 * speedNow(t), SY = opt.down ? 615 : 105, NS = .7, D = opt.down ? -1 : 1, mids = opt.mid || (portrait(W, H) && opt.fit !== 'fill');
   const lane = (opp, i) => mids ? 640 + (i - 1.5) * 112 : (opp ? 92 : 732) + 112 * i + 55;
   const ns = w.ns;
   const strum = (opp, i, st) => {
@@ -1764,7 +1817,7 @@ function draw() {
   if (t >= 0 && t < 5500) {
     const circ = p => p < .5 ? (1 - Math.sqrt(1 - (2 * p) ** 2)) / 2 : (Math.sqrt(1 - (-2 * p + 2) ** 2) + 1) / 2;
     const x = t < 1000 ? -320 + 320 * circ(t / 1000) : t < 3000 ? 0 : -450 * circ(Math.min(1, (t - 3000) / 1500));
-    const ok2 = Math.min(W / 1280, H / 720);
+    const ok2 = hudScale(W, H);
     g.setTransform(dpr * ok2, 0, 0, dpr * ok2, dpr * (W / 2 - 640 * ok2), dpr * (H / 2 - 360 * ok2));
     for (const [y, tag, a, b, bc] of [[15, '#00B4CC', 'Now Playing:', c.name, '#808080'], [125, '#004B69', 'Difficulty:', opt.diff.toUpperCase(), '#202020']]) {
       g.fillStyle = tag; g.fillRect(x, y, 315, 100); g.fillStyle = '#000'; g.fillRect(x, y, 300, 100);
@@ -1780,13 +1833,13 @@ function draw() {
     // judgement counter
     const ct = S.cnt || { sick:0, good:0, bad:0, shit:0 };
     [['Sicks', ct.sick, '#00e5ff'], ['Goods', ct.good, '#44e500'], ['Bads', ct.bad, '#e5b000'], ['Shits', ct.shit, '#e53b00'], ['Misses', S.misses, '#ff4d5e']]
-      .forEach(([l, v, col], i) => text(`${l}: ${v}`, 12, 300 + i * 24, 22, col, 'left'));
+      .forEach(([l, v, col], i) => { const ks = Math.max(0.6, Math.min(1.2, hudScale(W, H) * 1.3)); text(`${l}: ${v}`, 10, H * 0.42 + i * 24 * ks, 22 * ks, col, 'left'); });
   }
   if (opt.fps) text(`${Math.round(fpsM.fps)} FPS`, W - 12, H - 14, 18, fpsM.fps < 40 ? '#ff4d5e' : '#9f9', 'right');
   if (S.toast && clock - S.toast.t0 < 1200) { g.globalAlpha = Math.min(1, (1200 - (clock - S.toast.t0)) / 300); text(S.toast.txt, W / 2, 16, 20, '#fff'); g.globalAlpha = 1; }
   if (opt.bot) { g.globalAlpha = .5; g.font = '8px VT323, monospace'; g.textAlign = 'left'; g.textBaseline = 'top'; g.fillStyle = '#00B4CC'; g.fillText(opt.botsk < 100 ? 'BOTPLAY ' + opt.botsk : 'BOTPLAY', 2, 2); g.globalAlpha = 1; }
 }
-if (location.hash === '#dbg') window.__dbg = () => ({ S, W8, chart, opt, lib });
+if (location.hash === '#dbg') window.__dbg = () => ({ S, W8, chart, opt, lib, now });
 (function loop() {
   const n = performance.now(), dt = Math.min(100, n - lastFrame); lastFrame = n;
   if (S && !S.paused) clock += dt;
