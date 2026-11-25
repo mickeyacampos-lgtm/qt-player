@@ -69,6 +69,11 @@ input:focus-visible{outline:3px solid #fff;outline-offset:2px}
     <label for="keys">Keys</label>
     <select id="keys"><option value="WASD">W A S D</option><option value="ASKL">A S K L</option><option value="DFJK">D F J K</option><option value="CVNM">C V N M</option></select>
     <fieldset class="optbox"><legend>Options</legend>
+      <div class="row">
+        <div><label for="o_dev">Computer (sets the options below for it)</label><select id="o_dev">
+          <option value="auto">Auto</option><option value="cros">Chromebook</option><option value="winlow">Windows laptop</option><option value="winhigh">Windows gaming PC</option>
+          <option value="mac">Mac</option><option value="linux">Linux</option><option value="mobile">Phone or tablet</option></select></div>
+      </div>
       <div class="cols">
       <label class="chk"><input type="checkbox" id="o_lq"> Low quality (for Chromebooks)</label>
       <label class="chk"><input type="checkbox" id="o_down"> Downscroll</label>
@@ -83,10 +88,13 @@ input:focus-visible{outline:3px solid #fff;outline-offset:2px}
       <label class="chk"><input type="checkbox" id="o_flash" checked> Flashing lights</label>
       <label class="chk"><input type="checkbox" id="o_zoom" checked> Camera zooms</label>
       <label class="chk"><input type="checkbox" id="o_insta"> Instakill on miss</label>
+      <label class="chk"><input type="checkbox" id="o_fps"> Show FPS</label>
       </div>
+      <p class="small hide" id="crosNote" style="margin:4px 0 8px"></p>
       <div class="row">
         <div><label for="o_speed">Scroll speed</label><select id="o_speed"><option value="0">Chart</option><option value="1">1</option><option value="1.5">1.5</option><option value="2">2</option><option value="2.5">2.5</option><option value="3">3</option><option value="3.5">3.5</option><option value="4">4</option><option value="5">5</option></select></div>
         <div><label for="o_rate">Song speed</label><select id="o_rate"><option value="0.5">0.5x</option><option value="0.75">0.75x</option><option value="1" selected>1x</option><option value="1.25">1.25x</option><option value="1.5">1.5x</option><option value="2">2x</option></select></div>
+        <div><label for="o_res">Resolution</label><select id="o_res"><option value="0">Auto (drops if it lags)</option><option value="1">100%</option><option value="0.75">75%</option><option value="0.5">50%</option></select></div>
         <div><label for="o_off">Note offset (ms)</label><input id="o_off" type="number" min="-500" max="500" step="5" value="0"></div>
       </div>
       <div class="row">
@@ -139,6 +147,17 @@ const TYPES = {
 };
 let lib = { files:new Map(), songs:{}, hz:{}, hzb:null };
 let cache = new Map();
+// forget loaded pictures and free their memory (matters on Chromebooks)
+function dropCache() {
+  const old = cache; cache = new Map();
+  for (const p of old.values()) Promise.resolve(p).then(v => {
+    try {
+      if (!v) return; if (v.close) { v.close(); return; }
+      if (v.bmp && v.bmp.close) v.bmp.close();
+      if (v.spr) for (const b of new Set(Object.values(v.spr).map(x => x.bmp))) b.close && b.close();
+    } catch (e) {}
+  }).catch(() => {});
+}
 let ctx = null, bufs = {}, chart = null, S = null, W8 = null, dpr = 1, clock = 0, lastFrame = performance.now();
 let opt = { botsk:100, bot:false, practice:false, blue:0, keys:'WASD', diff:'', ghost:true, opp:true, rate:1, off:0, speed:0, vm:100, vv:100, vs:100 };
 const keysDown = new Set(), touchL = new Map();
@@ -147,15 +166,37 @@ const used = new Map();
 
 try { const k = localStorage.getItem('qtkeys'); if (k && KEYSETS[k]) $('keys').value = k; } catch (e) {}
 const OPTS = { lq:'o_lq', down:'o_down', mid:'o_mid', splash:'o_splash', flash:'o_flash', zoom:'o_zoom', ghost:'o_ghost', opp:'o_opp', hud:'o_hud', hits:'o_hits',
-               ms:'o_ms', insta:'o_insta', under:'o_under', botsk:'o_botsk', speed:'o_speed', rate:'o_rate', off:'o_off', vm:'o_vm', vv:'o_vv', vs:'o_vs' };
-const isChk = id => $(id).type === 'checkbox', getO = id => isChk(id) ? $(id).checked : (parseFloat($(id).value) || 0);
+               ms:'o_ms', insta:'o_insta', under:'o_under', botsk:'o_botsk', fps:'o_fps', res:'o_res', speed:'o_speed', dev:'o_dev', rate:'o_rate', off:'o_off', vm:'o_vm', vv:'o_vv', vs:'o_vs' };
+const isChk = id => $(id).type === 'checkbox', getO = id => { if (isChk(id)) return $(id).checked; const v = $(id).value; return isNaN(parseFloat(v)) ? v : parseFloat(v) || 0; };
+// computer setups: each one sets quality, resolution and splashes for that kind of computer
+const UA = navigator.userAgent, CROS = /CrOS/.test(UA), LOWMEM = (navigator.deviceMemory || 8) <= 4;
+const MOBILE = /Android|iPhone|iPad|Mobile/i.test(UA) || (/Mac/.test(UA) && navigator.maxTouchPoints > 1);
+const DEV_FOUND = CROS ? 'cros' : MOBILE ? 'mobile' : /Mac/.test(UA) ? 'mac' : /Win/.test(UA) ? (LOWMEM || (navigator.hardwareConcurrency || 8) <= 4 ? 'winlow' : 'winhigh') : /Linux/.test(UA) ? 'linux' : 'winlow';
+const WEAK = CROS || LOWMEM || MOBILE;
+const DEVS = {
+  cros:    { name:'Chromebook',        o_lq:true,  o_res:'0',    o_splash:false },
+  winlow:  { name:'Windows laptop',    o_lq:false, o_res:'0',    o_splash:true },
+  winhigh: { name:'Windows gaming PC', o_lq:false, o_res:'1',    o_splash:true },
+  mac:     { name:'Mac',               o_lq:false, o_res:'0',    o_splash:true },
+  linux:   { name:'Linux',             o_lq:false, o_res:'0',    o_splash:true },
+  mobile:  { name:'phone or tablet',   o_lq:true,  o_res:'0.75', o_splash:false },
+};
+$('o_dev').options[0].textContent = 'Auto (looks like a ' + DEVS[DEV_FOUND].name + ')';
+function applyDev(v) {
+  const d = DEVS[v === 'auto' ? DEV_FOUND : v]; if (!d) return;
+  for (const [id, val] of Object.entries(d)) if (id.startsWith('o_')) { if (isChk(id)) $(id).checked = val; else $(id).value = val; }
+  $('crosNote').textContent = `Set up for a ${d.name}: Low quality ${d.o_lq ? 'on' : 'off'}, resolution ${d.o_res === '0' ? 'Auto' : d.o_res * 100 + '%'}, splashes ${d.o_splash ? 'on' : 'off'}. You can still change any of them.`;
+  $('crosNote').classList.remove('hide');
+}
+$('o_dev').addEventListener('change', () => applyDev($('o_dev').value));
+try { if (!localStorage.getItem('qtopts')) applyDev('auto'); } catch (e) {}
 try { const o = JSON.parse(localStorage.getItem('qtopts') || '{}'); for (const [k, id] of Object.entries(OPTS)) if (k in o) { if (isChk(id)) $(id).checked = !!o[k]; else $(id).value = o[k]; } } catch (e) {}
 const showSk = () => { $('botskv').textContent = $('o_botsk').value; };
 $('o_botsk').addEventListener('input', showSk); showSk();
 function readOpts() {
   const o = {}; for (const [k, id] of Object.entries(OPTS)) o[k] = getO(id);
   o.rate = Math.max(0.25, o.rate || 1); o.botsk = Math.max(1, Math.min(100, o.botsk || 100)); o.off = Math.max(-500, Math.min(500, o.off));
-  if (o.lq !== opt.lq) cache = new Map();
+  if (o.lq !== opt.lq) dropCache();
   Object.assign(opt, o); try { localStorage.setItem('qtopts', JSON.stringify(o)); } catch (e) {}
   fit();
 }
@@ -218,7 +259,7 @@ async function build(entries, loose = { charts:{} }, hz = {}) {
   used.clear();
   const files = new Map(entries), songs = {}, roots = rootsOf(files.keys());
   lib = { files, roots, prefer:null, songs, hz, hzb:null, weekOf:{}, keyOf:new Map([...files].map(([k, f]) => [f, k])) };
-  cache = new Map(); bufs = {};
+  dropCache(); bufs = {};
   for (const [k, f] of files) {
     const m = k.match(/(?:^|\/)sounds\/(?:hazard\/)?([^\/]+)\.(?:ogg|mp3)$/);
     if (m && (SOUNDS.includes(m[1]) || EXTRA_SND.includes(m[1]))) hz[m[1]] ??= f;
@@ -314,7 +355,15 @@ $('zip').onchange = async e => {
   const z = e.target.files[0]; if (!z) return;
   try {
     status('Reading the zip…');
-    const list = await readZip(z), entries = [];
+    let list = await readZip(z);
+    // a zip with another zip inside (Google Drive does this): open the biggest inner zip
+    for (let d = 0; d < 3 && list.length <= 10; d++) {
+      const inner = list.filter(x => /\.zip$/i.test(x.path)).sort((a, b) => (b.size || 0) - (a.size || 0))[0];
+      if (!inner) break;
+      status('Opening the zip inside the zip…'); list = await readZip(await inner.blob());
+    }
+    if (list.length <= 10 && list.some(x => /\.(rar|7z)$/i.test(x.path))) { status('That has a .rar or .7z inside, and this site can only read zips. Open it in the Files app, copy the mod folder out, then use Pick a mod folder.'); return; }
+    const entries = [];
     for (const en of list) entries.push([en.path.replace(/\\/g, '/').toLowerCase(), en]);
     if (!entries.length) { status('That zip is empty.'); return; }
     await build(entries);
@@ -379,6 +428,10 @@ async function saveLast(song, diff) {
     const keep = [...lib.files].filter(([k]) => /(?:^|\/)(weeks|data\/levels)\//.test(k) || (so && so.dir && k.startsWith(so.dir)));
     const all = new Map([...keep, ...used]);
     const ents = [];
+    let total = 0; for (const f of all.values()) total += (f && (f.size || 0)) || 0;
+    const cap = WEAK ? 120e6 : 400e6;
+    try { const est = navigator.storage && await navigator.storage.estimate(); if (est && est.quota - est.usage < total * 1.5) return; } catch (e) {}
+    if (total > cap) return;
     for (const [k, f] of all) if (k && f) ents.push([k, f instanceof Blob ? f : new File([await f.blob()], f.name)]);
     await idbSet('last', { song, name:so ? so.name : song, diff, keys:opt.keys, entries:ents });
   } catch (e) {}
@@ -1435,6 +1488,8 @@ addEventListener('keyup', e => {
   S.held[lane] = 0; if (!opt.bot) S.ps[lane] = { a:'static', t0:clock, hold:0 };
 });
 addEventListener('blur', () => { keysDown.clear(); if (S && !S.paused && !S.dead && !S.ended) pause(); });
+// closing the lid or switching tabs pauses too
+document.addEventListener('visibilitychange', () => { if (document.hidden) { keysDown.clear(); if (S && !S.paused && !S.dead && !S.ended) pause(); } });
 // touchscreens: the screen is split into 4 lanes; the top right corner pauses
 cv.addEventListener('touchstart', e => {
   if (!S || menu || S.paused || S.dead || S.ended) return; e.preventDefault();
@@ -1451,7 +1506,22 @@ const touchEnd = e => {
 cv.addEventListener('touchend', touchEnd); cv.addEventListener('touchcancel', touchEnd);
 
 /* ---------- drawing ---------- */
-function fit() { dpr = opt.lq ? 1 : Math.min(devicePixelRatio || 1, 2); cv.width = innerWidth * dpr; cv.height = innerHeight * dpr; }
+let rs = 1;   // render scale: the canvas draws at this fraction of the screen's pixels
+function fit() {
+  rs = opt.res > 0 ? opt.res : Math.min(rs, 1);
+  dpr = (opt.lq ? 1 : Math.min(devicePixelRatio || 1, 2)) * rs;
+  cv.width = Math.round(innerWidth * dpr); cv.height = Math.round(innerHeight * dpr);
+}
+// Auto resolution: if a song runs under ~40 fps for a few seconds, draw fewer pixels
+const fpsM = { n:0, t:0, fps:60, low:0 };
+function watchFps(dt) {
+  fpsM.n++; fpsM.t += dt;
+  if (fpsM.t < 1000) return;
+  fpsM.fps = fpsM.n * 1000 / fpsM.t; fpsM.n = 0; fpsM.t = 0;
+  if (!S || S.paused || S.dead || S.ended || opt.res > 0) { fpsM.low = 0; return; }
+  fpsM.low = fpsM.fps < 40 ? fpsM.low + 1 : 0;
+  if (fpsM.low >= 3 && rs > 0.5) { rs = Math.max(0.5, rs - 0.25); fpsM.low = 0; fit(); toast(`Lag: resolution ${Math.round(rs * 100)}%`); }
+}
 addEventListener('resize', fit); fit();
 function arrow(x, y, s, lane, fill, stroke) {
   g.save(); g.translate(x, y); g.rotate(ROT[lane]); g.beginPath();
@@ -1712,6 +1782,7 @@ function draw() {
     [['Sicks', ct.sick, '#00e5ff'], ['Goods', ct.good, '#44e500'], ['Bads', ct.bad, '#e5b000'], ['Shits', ct.shit, '#e53b00'], ['Misses', S.misses, '#ff4d5e']]
       .forEach(([l, v, col], i) => text(`${l}: ${v}`, 12, 300 + i * 24, 22, col, 'left'));
   }
+  if (opt.fps) text(`${Math.round(fpsM.fps)} FPS`, W - 12, H - 14, 18, fpsM.fps < 40 ? '#ff4d5e' : '#9f9', 'right');
   if (S.toast && clock - S.toast.t0 < 1200) { g.globalAlpha = Math.min(1, (1200 - (clock - S.toast.t0)) / 300); text(S.toast.txt, W / 2, 16, 20, '#fff'); g.globalAlpha = 1; }
   if (opt.bot) { g.globalAlpha = .5; g.font = '8px VT323, monospace'; g.textAlign = 'left'; g.textBaseline = 'top'; g.fillStyle = '#00B4CC'; g.fillText(opt.botsk < 100 ? 'BOTPLAY ' + opt.botsk : 'BOTPLAY', 2, 2); g.globalAlpha = 1; }
 }
@@ -1719,7 +1790,7 @@ if (location.hash === '#dbg') window.__dbg = () => ({ S, W8, chart, opt, lib });
 (function loop() {
   const n = performance.now(), dt = Math.min(100, n - lastFrame); lastFrame = n;
   if (S && !S.paused) clock += dt;
-  update(dt); draw(); requestAnimationFrame(loop);
+  watchFps(dt); update(dt); draw(); requestAnimationFrame(loop);
 })();
 }
 </script>
